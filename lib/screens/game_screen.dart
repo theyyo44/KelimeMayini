@@ -1542,58 +1542,92 @@ class _GameScreenState extends State<GameScreen> {
               bool isFirstMove = board.every((row) => row.every((cell) => cell.isEmpty));
 
               if (isFirstMove) {
-                // İlk hamle için:
+                // İlk hamle için herhangi bir hücreye izin ver
+                return true;
+              } else {
+                // İlk hamle değilse:
                 if (tempPlacedLetters.isEmpty) {
-                  // İlk hamledeki ilk harf herhangi bir yere yerleştirilebilir
-                  return true;
-                } else {
-                  // Sonraki harfler, yerleştirilen ilk harfle aynı satır veya sütunda olmalı
-                  List<String> positions = tempPlacedLetters.keys.toList();
-                  String firstPos = positions[0]; // İlk yerleştirilen harfin konumu
-                  List<int> firstParts = firstPos.split('-').map(int.parse).toList();
+                  // İlk harf mevcut tahtadaki harflere bitişik olmalı
+                  bool touchesExistingLetter = false;
 
-                  // Aynı satırda veya aynı sütunda olmalı
-                  return (row == firstParts[0]) || (col == firstParts[1]);
-                }
-              }
-              // İlk hamle değilse:
-              // İlk yerleştirilen harf mevcut tahtadaki harflere bitişik olmalı
-              if (tempPlacedLetters.isEmpty) {
-                List<List<int>> directions = [
-                  [row - 1, col], // yukarı
-                  [row + 1, col], // aşağı
-                  [row, col - 1], // sol
-                  [row, col + 1]  // sağ
-                ];
-                for (var dir in directions) {
-                  int r = dir[0];
-                  int c = dir[1];
-                  if (r >= 0 && r < 15 && c >= 0 && c < 15) {
-                    if (board[r][c].isNotEmpty) {
-                      return true;
+                  // Komşu hücreleri kontrol et
+                  final directions = [
+                    [row - 1, col], // yukarı
+                    [row + 1, col], // aşağı
+                    [row, col - 1], // sol
+                    [row, col + 1]  // sağ
+                  ];
+
+                  for (var dir in directions) {
+                    int r = dir[0];
+                    int c = dir[1];
+
+                    if (r >= 0 && r < 15 && c >= 0 && c < 15) {
+                      if (board[r][c].isNotEmpty) {
+                        touchesExistingLetter = true;
+                        break;
+                      }
                     }
                   }
+
+                  return touchesExistingLetter;
+                } else {
+                  // Geçici yerleştirilen harfler varsa:
+                  // 1. Geri kalan harfler için doğrultuyu belirle
+                  List<String> positions = tempPlacedLetters.keys.toList();
+                  bool isHorizontal = true;
+                  bool isVertical = true;
+
+                  if (positions.length > 1) {
+                    // Yönü belirle
+                    int firstRow = int.parse(positions[0].split('-')[0]);
+                    int firstCol = int.parse(positions[0].split('-')[1]);
+
+                    for (int i = 1; i < positions.length; i++) {
+                      int currRow = int.parse(positions[i].split('-')[0]);
+                      int currCol = int.parse(positions[i].split('-')[1]);
+
+                      if (currRow != firstRow) isHorizontal = false;
+                      if (currCol != firstCol) isVertical = false;
+                    }
+                  } else {
+                    // Tek harf varsa, yönü belirlemek için mevcut tahtadaki harflere bak
+                    int posRow = int.parse(positions[0].split('-')[0]);
+                    int posCol = int.parse(positions[0].split('-')[1]);
+
+                    // Solunda veya sağında harf var mı kontrol et
+                    bool hasHorizontalNeighbor = (posCol > 0 && board[posRow][posCol-1].isNotEmpty) ||
+                        (posCol < 14 && board[posRow][posCol+1].isNotEmpty);
+
+                    // Üstünde veya altında harf var mı kontrol et
+                    bool hasVerticalNeighbor = (posRow > 0 && board[posRow-1][posCol].isNotEmpty) ||
+                        (posRow < 14 && board[posRow+1][posCol].isNotEmpty);
+
+                    if (hasHorizontalNeighbor && !hasVerticalNeighbor) {
+                      isHorizontal = true;
+                      isVertical = false;
+                    } else if (!hasHorizontalNeighbor && hasVerticalNeighbor) {
+                      isHorizontal = false;
+                      isVertical = true;
+                    }
+                  }
+
+                  // 2. Yeni harf yerleştirilebilir mi kontrol et
+                  if (isHorizontal) {
+                    // Yatay kelime: aynı satırda olmalı
+                    int commonRow = int.parse(positions[0].split('-')[0]);
+                    return row == commonRow;
+                  } else if (isVertical) {
+                    // Dikey kelime: aynı sütunda olmalı
+                    int commonCol = int.parse(positions[0].split('-')[1]);
+                    return col == commonCol;
+                  } else {
+                    // Belirli bir yön yok, her iki yöne de izin ver
+                    int firstRow = int.parse(positions[0].split('-')[0]);
+                    int firstCol = int.parse(positions[0].split('-')[1]);
+                    return row == firstRow || col == firstCol;
+                  }
                 }
-                return false;
-              } else {
-                // Sonraki harfler, ilk yerleştirilen harfle aynı satır veya sütunda olmalı
-                List<String> positions = tempPlacedLetters.keys.toList();
-                bool allSameRow = true;
-                bool allSameCol = true;
-                int firstRow = int.parse(positions[0].split('-')[0]);
-                int firstCol = int.parse(positions[0].split('-')[1]);
-                for (var pos in positions) {
-                  List<int> parts = pos.split('-').map(int.parse).toList();
-                  if (parts[0] != firstRow) allSameRow = false;
-                  if (parts[1] != firstCol) allSameCol = false;
-                }
-                if (allSameRow) {
-                  return row == firstRow;
-                } else if (allSameCol) {
-                  return col == firstCol;
-                }
-                // İlk yerleştirilen harflerle aynı satırda mı yoksa aynı sütunda mı olmalı?
-                return (row == firstRow) || (col == firstCol);
               }
             },
             onAccept: (data) {
