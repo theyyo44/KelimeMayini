@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'dart:math';
+import 'dart:convert';
+import 'package:flutter/services.dart' show rootBundle;
 
 class GameScreen extends StatefulWidget {
   final String gameId;
@@ -17,12 +19,27 @@ class _GameScreenState extends State<GameScreen> {
   List<List<String>> board = List.generate(15, (_) => List.filled(15, ''));
   List<Map<String, dynamic>> myLetters = [];
   Map<String, Map<String, dynamic>> placedLetters = {};
+  Map<String, Map<String, dynamic>> tempPlacedLetters = {}; // Geçici yerleştirilen harfler
   int remainingLettersCount = 86; // Initial count of letters in the pool
   bool isLoading = true;
   String opponentId = '';
   int myScore = 0;
   int opponentScore = 0;
   bool myTurn = false;
+
+  // Kelime listesi
+  Set<String> validWords = {};
+  bool isWordValid = false;
+  String currentWord = '';
+  int currentWordScore = 0;
+
+  // Mayın ve Ödüller
+  Map<String, Map<String, dynamic>> mines = {};
+  List<Map<String, dynamic>> rewards = [];
+
+  // Oyun durumu izleme
+  int consecutivePassCount = 0;
+  bool gameEnded = false;
 
   // Letter pool with counts and points
   final List<Map<String, dynamic>> _letterPool = [
@@ -62,12 +79,107 @@ class _GameScreenState extends State<GameScreen> {
   Map<String, int> remainingLetters = {};
   List<Map<String, dynamic>> letterPoolFlat = [];
 
+  int nextLetterId = 0;
+
   @override
   void initState() {
     super.initState();
+    _loadWordList();
     _initializeLetterPool();
     _loadGameData();
     _setupGameListener();
+    _setupMinesAndRewards();
+  }
+
+  Future<void> _loadWordList() async {
+    try {
+      // Load the Turkish word list from assets
+      final String data = await rootBundle.loadString('assets/turkish_words.txt');
+      final List<String> words = LineSplitter.split(data).toList();
+
+      validWords = Set<String>.from(words);
+    } catch (e) {
+      debugPrint('Error loading word list: $e');
+    }
+  }
+
+  void _setupMinesAndRewards() {
+    // Mayınların yerleştirilmesi
+    _placeMines([
+      {'type': 'pointDivision', 'count': 5}, // Puan Bölünmesi
+      {'type': 'pointTransfer', 'count': 4}, // Puan Transferi
+      {'type': 'letterLoss', 'count': 3},    // Harf Kaybı
+      {'type': 'bonusBlock', 'count': 2},    // Ekstra Hamle Engeli
+      {'type': 'wordCancel', 'count': 2},    // Kelime İptali
+    ]);
+
+    // Ödüllerin yerleştirilmesi
+    _placeRewards([
+      {'type': 'areaRestriction', 'count': 2}, // Bölge Yasağı
+      {'type': 'letterRestriction', 'count': 3}, // Harf Yasağı
+      {'type': 'extraMove', 'count': 2},       // Ekstra Hamle Jokeri
+    ]);
+  }
+
+  void _placeMines(List<Map<String, dynamic>> mineTypes) {
+    Random random = Random();
+    List<String> positions = [];
+
+    // Mayınların yerleştirileceği rastgele konumları belirle
+    for (var mineType in mineTypes) {
+      for (int i = 0; i < mineType['count']; i++) {
+        String position;
+        int newRow;
+        int newCol;
+
+        do {
+          newRow = random.nextInt(15);
+          newCol = random.nextInt(15);
+          position = '$newRow-$newCol';
+        } while (positions.contains(position) || (newRow == 7 && newCol == 7)); // Merkezi boş bırak
+
+        positions.add(position);
+        mines[position] = {
+          'type': mineType['type'],
+          'triggered': false,
+        };
+      }
+    }
+  }
+
+  void _placeRewards(List<Map<String, dynamic>> rewardTypes) {
+    Random random = Random();
+    List<String> positions = [];
+
+    // Ödüllerin yerleştirileceği rastgele konumları belirle
+    for (var rewardType in rewardTypes) {
+      for (int i = 0; i < rewardType['count']; i++) {
+        String position;
+        int newRow;
+        int newCol;
+
+        do {
+          newRow = random.nextInt(15);
+          newCol = random.nextInt(15);
+          position = '$newRow-$newCol';
+        } while (positions.contains(position) ||
+            mines.containsKey(position) ||
+            (newRow == 7 && newCol == 7)); // Merkezi ve mayınları boş bırak
+
+        positions.add(position);
+
+        // Ödülü Firebase'e ekle
+        FirebaseFirestore.instance
+            .collection('games')
+            .doc(widget.gameId)
+            .update({
+          "rewards.$position": {
+            'type': rewardType['type'],
+            'collected': false,
+          }
+        });
+      }
+    }
   }
 
   void _initializeLetterPool() {
@@ -136,6 +248,24 @@ class _GameScreenState extends State<GameScreen> {
         }
       }
 
+      // Load mines state if exists
+      if (gameData['mines'] != null) {
+        mines = Map<String, Map<String, dynamic>>.from(gameData['mines']);
+      }
+
+      // Load rewards state if exists
+      if (gameData['rewards'] != null) {
+        final Map<String, dynamic> rewardsData = gameData['rewards'];
+        for (var entry in rewardsData.entries) {
+          if (entry.value['collected'] == true && entry.value['collectedBy'] == widget.userId) {
+            rewards.add({
+              'type': entry.value['type'],
+              'position': entry.key,
+            });
+          }
+        }
+      }
+
       // Load letter pool state
       if (gameData['letterPool'] != null) {
         final poolData = List<Map<String, dynamic>>.from(gameData['letterPool']);
@@ -152,6 +282,9 @@ class _GameScreenState extends State<GameScreen> {
       } else {
         myLetters = List<Map<String, dynamic>>.from(lettersMap[widget.userId]);
       }
+
+      // Get consecutive pass count
+      consecutivePassCount = gameData['consecutivePassCount'] ?? 0;
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Veri yüklenirken hata: $e")),
@@ -178,6 +311,14 @@ class _GameScreenState extends State<GameScreen> {
         myScore = gameData['scores']?[widget.userId] ?? 0;
         opponentScore = gameData['scores']?[opponentId] ?? 0;
         myTurn = gameData['currentTurn'] == widget.userId;
+        consecutivePassCount = gameData['consecutivePassCount'] ?? 0;
+
+        // Check if game ended
+        if (gameData['status'] == 'completed') {
+          gameEnded = true;
+          // Show game end dialog
+          _showGameEndDialog(gameData['winner'] == widget.userId, gameData['endReason']);
+        }
 
         // Update letter pool count
         if (gameData['letterPool'] != null) {
@@ -205,8 +346,68 @@ class _GameScreenState extends State<GameScreen> {
             }
           }
         }
+
+        // Update rewards
+        if (gameData['rewards'] != null) {
+          rewards.clear();
+          final Map<String, dynamic> rewardsData = gameData['rewards'];
+          for (var entry in rewardsData.entries) {
+            if (entry.value['collected'] == true && entry.value['collectedBy'] == widget.userId) {
+              rewards.add({
+                'type': entry.value['type'],
+                'position': entry.key,
+              });
+            }
+          }
+        }
       });
     });
+  }
+
+  void _showGameEndDialog(bool isWinner, String? reason) {
+    if (context.mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: Text(isWinner ? 'Tebrikler! Kazandın!' : 'Oyun Bitti'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(isWinner
+                  ? 'Puanın: $myScore\nRakip puanı: $opponentScore'
+                  : 'Rakip kazandı.\nPuanın: $myScore\nRakip puanı: $opponentScore'),
+              if (reason != null)
+                Text('\nBitiş nedeni: ${_getEndReasonText(reason)}'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).pop(); // Ana menüye dön
+              },
+              child: const Text('Ana Menüye Dön'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  String _getEndReasonText(String reason) {
+    switch (reason) {
+      case 'surrender':
+        return 'Teslim olma';
+      case 'noLetters':
+        return 'Harfler tükendi';
+      case 'timeOut':
+        return 'Süre doldu';
+      case 'consecutivePasses':
+        return 'Üst üste pas geçme';
+      default:
+        return 'Oyun tamamlandı';
+    }
   }
 
   Future<void> _distributeInitialLetters() async {
@@ -214,7 +415,12 @@ class _GameScreenState extends State<GameScreen> {
 
     // İlk 7 harfi al (havuzda daha az varsa mevcut sayıyı)
     final count = min(7, letterPoolFlat.length);
-    final userLetters = letterPoolFlat.take(count).toList();
+    final userLetters = letterPoolFlat.take(count).map((letter) {
+      return {
+        ...letter,
+        "id": nextLetterId++, // Her harfe benzersiz bir ID ekliyoruz
+      };
+    }).toList();
 
     // Dağıtılan harfleri havuzdan çıkar
     letterPoolFlat.removeRange(0, count);
@@ -246,14 +452,18 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
-// Yeni harf çekme fonksiyonunu da düzelt
   Future<void> _drawNewLetters(int count) async {
     if (letterPoolFlat.isEmpty) return;
 
     final drawCount = min(count, letterPoolFlat.length);
     if (drawCount <= 0) return;
 
-    final newLetters = letterPoolFlat.take(drawCount).toList();
+    final newLetters = letterPoolFlat.take(drawCount).map((letter) {
+      return {
+        ...letter,
+        "id": nextLetterId++, // Her harfe benzersiz bir ID ekliyoruz
+      };
+    }).toList();
     letterPoolFlat.removeRange(0, drawCount);
 
     final updatedLetters = [...myLetters, ...newLetters];
@@ -286,21 +496,490 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
+  bool _isValidWordPlacement() {
+    // Kontrol 1: En az bir harf yerleştirilmiş olmalı
+    if (tempPlacedLetters.isEmpty) return false;
 
-// Hamle onaylama fonksiyonunu da düzelt
+    // Kontrol 2: İlk hamle merkez hücreye (7,7) temas etmeli
+    bool isFirstMove = board.every((row) => row.every((cell) => cell.isEmpty));
+    if (isFirstMove && !tempPlacedLetters.containsKey('7-7')) return false;
+
+    // Kontrol 3.5: Yerleştirilen harfler tek doğrultuda olmalı
+    if (tempPlacedLetters.length > 1) {
+      bool isHorizontal = true;
+      bool isVertical = true;
+
+      List<String> positions = tempPlacedLetters.keys.toList();
+      List<List<int>> coords = positions.map((p) => p.split('-').map(int.parse).toList()).toList();
+
+      int firstRow = coords[0][0];
+      int firstCol = coords[0][1];
+
+      // Tüm harflerin aynı satır veya sütunda olup olmadığını kontrol et
+      for (int i = 1; i < coords.length; i++) {
+        if (coords[i][0] != firstRow) isHorizontal = false;
+        if (coords[i][1] != firstCol) isVertical = false;
+      }
+
+      // Ne yatay ne dikey ise geçersiz yerleştirme
+      if (!isHorizontal && !isVertical) return false;
+    }
+
+
+    // Kontrol 3: En az bir mevcut harfe bitişik olmalı (ilk hamle değilse)
+    bool touchesExistingLetter = false;
+
+    for (var position in tempPlacedLetters.keys) {
+      final parts = position.split('-');
+      final row = int.parse(parts[0]);
+      final col = int.parse(parts[1]);
+
+      // Yukarı, aşağı, sol, sağ hücreleri kontrol et
+      final directions = [
+        [row - 1, col], // yukarı
+        [row + 1, col], // aşağı
+        [row, col - 1], // sol
+        [row, col + 1], // sağ
+      ];
+
+      for (var dir in directions) {
+        int r = dir[0];
+        int c = dir[1];
+
+        if (r >= 0 && r < 15 && c >= 0 && c < 15) {
+          // Tahtada yerleşik bir harfe dokunuyor mu?
+          if (board[r][c].isNotEmpty) {
+            touchesExistingLetter = true;
+            break;
+          }
+        }
+      }
+
+      if (touchesExistingLetter) break;
+    }
+
+    if (!touchesExistingLetter) return false;
+
+    // Kontrol 4: Yerleştirilen harfler ya yatay ya da dikey bir çizgide olmalı
+    bool isHorizontal = true;
+    bool isVertical = true;
+    int? commonRow, commonCol;
+
+    List<String> positions = tempPlacedLetters.keys.toList();
+    if (positions.length > 1) {
+      // İlk iki konum arasında yön belirle
+      List<int> parts1 = positions[0].split('-').map(int.parse).toList();
+      List<int> parts2 = positions[1].split('-').map(int.parse).toList();
+
+      if (parts1[0] == parts2[0]) {
+        // Yatay yerleştirme (aynı satır)
+        isVertical = false;
+        commonRow = parts1[0];
+      } else if (parts1[1] == parts2[1]) {
+        // Dikey yerleştirme (aynı sütun)
+        isHorizontal = false;
+        commonCol = parts1[1];
+      } else {
+        // Ne yatay ne dikey
+        return false;
+      }
+
+      // Diğer tüm konumlar için yönü doğrula
+      for (int i = 2; i < positions.length; i++) {
+        List<int> parts = positions[i].split('-').map(int.parse).toList();
+
+        if (isHorizontal && parts[0] != commonRow) return false;
+        if (isVertical && parts[1] != commonCol) return false;
+      }
+    }
+
+    // Kontrol 5: Yerleştirilen harfler birbirine bitişik olmalı (boşluk olmamalı)
+    if (positions.length > 1) {
+      // Pozisyonları sırala
+      if (isHorizontal && commonRow != null) {
+        // Sütun numaralarına göre sırala
+        positions.sort((a, b) {
+          int colA = int.parse(a.split('-')[1]);
+          int colB = int.parse(b.split('-')[1]);
+          return colA.compareTo(colB);
+        });
+
+        // Ardışık olduğunu kontrol et
+        for (int i = 1; i < positions.length; i++) {
+          int prevCol = int.parse(positions[i-1].split('-')[1]);
+          int currCol = int.parse(positions[i].split('-')[1]);
+
+          // Aradaki boşlukları kontrol et
+          for (int col = prevCol + 1; col < currCol; col++) {
+            // Boşluk tahtadaki bir harfle doldurulmuş mu?
+            if (board[commonRow][col].isEmpty) {
+              return false;
+            }
+          }
+        }
+      } else if (isVertical && commonCol != null) {
+        // Satır numaralarına göre sırala
+        positions.sort((a, b) {
+          int rowA = int.parse(a.split('-')[0]);
+          int rowB = int.parse(b.split('-')[0]);
+          return rowA.compareTo(rowB);
+        });
+
+        // Ardışık olduğunu kontrol et
+        for (int i = 1; i < positions.length; i++) {
+          int prevRow = int.parse(positions[i-1].split('-')[0]);
+          int currRow = int.parse(positions[i].split('-')[0]);
+
+          // Aradaki boşlukları kontrol et
+          for (int row = prevRow + 1; row < currRow; row++) {
+            // Boşluk tahtadaki bir harfle doldurulmuş mu?
+            if (board[row][commonCol].isEmpty) {
+              return false;
+            }
+          }
+        }
+      }
+    }
+
+    // Kontrol 6: İlk hamle değilse, en az bir mevcut harfe bitişik olmalı
+    if (!isFirstMove) {
+      bool touchesExistingLetter = false;
+
+      for (String position in positions) {
+        List<int> parts = position.split('-').map(int.parse).toList();
+        int row = parts[0];
+        int col = parts[1];
+
+        // Yukarı, aşağı, sol, sağ hücreleri kontrol et
+        final directions = [
+          [row - 1, col], // yukarı
+          [row + 1, col], // aşağı
+          [row, col - 1], // sol
+          [row, col + 1], // sağ
+        ];
+
+        for (var dir in directions) {
+          int r = dir[0];
+          int c = dir[1];
+
+          if (r >= 0 && r < 15 && c >= 0 && c < 15) {
+            // Tahtada yerleşik bir harfe dokunuyor mu?
+            if (board[r][c].isNotEmpty && !tempPlacedLetters.containsKey('$r-$c')) {
+              touchesExistingLetter = true;
+              break;
+            }
+          }
+        }
+
+        if (touchesExistingLetter) break;
+      }
+
+      if (!touchesExistingLetter) return false;
+    }
+
+    // Kontrol 6: Yerleştirilen harfler ve mevcut harflerle oluşturulan tüm kelimeler geçerli olmalı
+    // Bu kontrolü _updateCurrentWord() içinde yapıyoruz
+
+    // Tüm kontrolleri geçti
+    return true;
+  }
+
+  void _updateCurrentWord() {
+    if (tempPlacedLetters.isEmpty) {
+      setState(() {
+        currentWord = '';
+        isWordValid = false;
+        currentWordScore = 0;
+      });
+      return;
+    }
+
+    // Ana kelimeyi bulma
+    List<String> positions = tempPlacedLetters.keys.toList();
+
+    // Tüm harfler aynı satırda mı yoksa aynı sütunda mı kontrol et
+    bool allSameRow = true;
+    bool allSameCol = true;
+    int? firstRow, firstCol;
+
+    if (positions.isNotEmpty) {
+      List<int> parts = positions[0].split('-').map(int.parse).toList();
+      firstRow = parts[0];
+      firstCol = parts[1];
+
+      for (int i = 1; i < positions.length; i++) {
+        List<int> currentParts = positions[i].split('-').map(int.parse).toList();
+        if (currentParts[0] != firstRow) allSameRow = false;
+        if (currentParts[1] != firstCol) allSameCol = false;
+      }
+    }
+
+    bool isHorizontal = allSameRow && !allSameCol;
+    bool isVertical = !allSameRow && allSameCol;
+
+    // Tek bir harf yerleştirilmiş olabilir, yönü belirlemek için komşularına bakmalıyız
+    if (positions.length == 1 && firstRow != null && firstCol != null) {
+      bool hasHorizontalNeighbor = (firstCol! > 0 && board[firstRow!][firstCol! - 1].isNotEmpty) ||
+          (firstCol! < 14 && board[firstRow!][firstCol! + 1].isNotEmpty);
+      bool hasVerticalNeighbor = (firstRow! > 0 && board[firstRow! - 1][firstCol!].isNotEmpty) ||
+          (firstRow! < 14 && board[firstRow! + 1][firstCol!].isNotEmpty);
+
+      if (hasHorizontalNeighbor && !hasVerticalNeighbor) {
+        isHorizontal = true;
+        isVertical = false;
+      } else if (!hasHorizontalNeighbor && hasVerticalNeighbor) {
+        isHorizontal = false;
+        isVertical = true;
+      } else {
+        // Varsayılan olarak yatay diyelim (aslında buraya gelmemesi lazım)
+        isHorizontal = true;
+        isVertical = false;
+      }
+    }
+
+    // Ana kelimeyi oluştur ve kontrol et
+    String mainWord = "";
+    int totalScore = 0;
+    bool wordValid = false;
+
+    if (isHorizontal && firstRow != null) {
+      // Yatay kelime için, en sol noktayı bul
+      int minCol = firstCol!;
+      while (minCol > 0 && (board[firstRow!][minCol - 1].isNotEmpty || tempPlacedLetters.containsKey('$firstRow-${minCol - 1}'))) {
+        minCol--;
+      }
+
+      // Kelimeyi oluştur
+      String word = "";
+      for (int col = minCol; col < 15; col++) {
+        String letter = "";
+        if (tempPlacedLetters.containsKey('$firstRow-$col')) {
+          letter = tempPlacedLetters['$firstRow-$col']!['char'];
+        } else if (board[firstRow!][col].isNotEmpty) {
+          letter = board[firstRow!][col];
+        } else {
+          break; // Kelime sona erdi
+        }
+        word += letter;
+      }
+
+      if (word.length > 1) {
+        mainWord = word;
+        wordValid = validWords.contains(word.toLowerCase());
+        totalScore = _calculateWordScore(true, firstRow!, minCol, word.length);
+      }
+    } else if (isVertical && firstCol != null) {
+      // Dikey kelime için, en üst noktayı bul
+      int minRow = firstRow!;
+      while (minRow > 0 && (board[minRow - 1][firstCol!].isNotEmpty || tempPlacedLetters.containsKey('${minRow - 1}-$firstCol'))) {
+        minRow--;
+      }
+
+      // Kelimeyi oluştur
+      String word = "";
+      for (int row = minRow; row < 15; row++) {
+        String letter = "";
+        if (tempPlacedLetters.containsKey('$row-$firstCol')) {
+          letter = tempPlacedLetters['$row-$firstCol']!['char'];
+        } else if (board[row][firstCol!].isNotEmpty) {
+          letter = board[row][firstCol!];
+        } else {
+          break; // Kelime sona erdi
+        }
+        word += letter;
+      }
+
+      if (word.length > 1) {
+        mainWord = word;
+        wordValid = validWords.contains(word.toLowerCase());
+        totalScore = _calculateWordScore(false, minRow, firstCol!, word.length);
+      }
+    }
+
+    setState(() {
+      currentWord = mainWord;
+      isWordValid = wordValid && mainWord.length > 1;
+      currentWordScore = totalScore;
+    });
+  }
+
+// Kelime puanını hesapla
+  int _calculateWordScore(bool isHorizontal, int startRow, int startCol, int length) {
+    int score = 0;
+    int wordMultiplier = 1;
+
+    for (int i = 0; i < length; i++) {
+      int row = isHorizontal ? startRow : startRow + i;
+      int col = isHorizontal ? startCol + i : startCol;
+
+      // Sınırları kontrol et
+      if (row >= 15 || col >= 15) break;
+
+      // Harfin puanını al
+      int letterPoint = 0;
+      String posKey = '$row-$col';
+
+      if (tempPlacedLetters.containsKey(posKey)) {
+        letterPoint = tempPlacedLetters[posKey]!['point'] as int;
+      } else if (board[row][col].isNotEmpty) {
+        // Tahtadaki harfin puanını bulmak için _letterPool'dan arama yapabilirsiniz
+        String letter = board[row][col];
+        var letterInfo = _letterPool.firstWhere((l) => l['char'] == letter, orElse: () => {"point": 1});
+        letterPoint = letterInfo['point'] as int;
+      }
+
+      int letterMultiplier = 1;
+
+      // Özel hücreler için çarpanları uygula (sadece yeni yerleştirilen harfler için)
+      if (tempPlacedLetters.containsKey(posKey)) {
+        // Harfin 2 katı
+        if ((row == 3 && (col == 0 || col == 7 || col == 14)) ||
+            (row == 7 && (col == 3 || col == 11)) ||
+            (row == 11 && (col == 0 || col == 7 || col == 14))) {
+          letterMultiplier = 2;
+        }
+        // Harfin 3 katı
+        else if ((row == 1 && (col == 5 || col == 9)) ||
+            (row == 5 && (col == 1 || col == 5 || col == 9 || col == 13)) ||
+            (row == 9 && (col == 1 || col == 5 || col == 9 || col == 13)) ||
+            (row == 13 && (col == 5 || col == 9))) {
+          letterMultiplier = 3;
+        }
+        // Kelimenin 2 katı
+        else if ((row == 1 && (col == 1 || col == 13)) ||
+            (row == 2 && (col == 2 || col == 12)) ||
+            (row == 3 && (col == 3 || col == 11)) ||
+            (row == 4 && (col == 4 || col == 10)) ||
+            (row == 10 && (col == 4 || col == 10)) ||
+            (row == 11 && (col == 3 || col == 11)) ||
+            (row == 12 && (col == 2 || col == 12)) ||
+            (row == 13 && (col == 1 || col == 13))) {
+          wordMultiplier *= 2;
+        }
+        // Kelimenin 3 katı
+        else if ((row == 0 && (col == 0 || col == 7 || col == 14)) ||
+            (row == 7 && (col == 0 || col == 14)) ||
+            (row == 14 && (col == 0 || col == 7 || col == 14))) {
+          wordMultiplier *= 3;
+        }
+      }
+
+      score += letterPoint * letterMultiplier;
+    }
+
+    // Kelime çarpanını uygula
+    return score * wordMultiplier;
+  }
+
   Future<void> _confirmMove() async {
-    if (placedLetters.isEmpty) {
+    if (tempPlacedLetters.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Önce bir kelime oluşturun")),
       );
       return;
     }
 
+    // Kelime yerleştirme kurallarını kontrol et
+    if (!_isValidWordPlacement()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Geçersiz yerleştirme! Kelime tahtadaki harflere bağlı olmalı.")),
+      );
+      return;
+    }
+
+    // Kelime geçerli mi kontrol et
+    _updateCurrentWord();
+    if (!isWordValid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Geçersiz kelime! Türkçe kelime listesinde bulunamadı.")),
+      );
+      return;
+    }
+
     try {
-      // Yerleştirilen harfler için puan hesapla
-      int moveScore = 0;
-      for (var letter in placedLetters.values) {
-        moveScore += letter['point'] as int;
+      // Kelimeyi oluşturan harfleri mayınlar açısından kontrol et
+      int originalScore = currentWordScore;
+      int finalScore = originalScore;
+      bool transferPoints = false;
+      bool cancelPoints = false;
+      bool letterLoss = false;
+      bool disableBonuses = false;
+
+      // Mayın kontrolü
+      for (var entry in tempPlacedLetters.entries) {
+        if (mines.containsKey(entry.key) && mines[entry.key]!['triggered'] == false) {
+          final mineType = mines[entry.key]!['type'];
+
+          switch (mineType) {
+            case 'pointDivision': // Puan Bölünmesi
+              finalScore = (originalScore * 0.3).round();
+              _showMineEffect("Puan Bölünmesi! Puanın %30'u alındı.");
+              break;
+            case 'pointTransfer': // Puan Transferi
+              transferPoints = true;
+              _showMineEffect("Puan Transferi! Puanın rakibe gitti.");
+              break;
+            case 'letterLoss': // Harf Kaybı
+              letterLoss = true;
+              _showMineEffect("Harf Kaybı! Elindeki harfler yenilenecek.");
+              break;
+            case 'bonusBlock': // Ekstra Hamle Engeli
+              disableBonuses = true;
+              if (originalScore != finalScore) {
+                _showMineEffect("Ekstra Hamle Engeli! Bonus puanlar iptal edildi.");
+              }
+              break;
+            case 'wordCancel': // Kelime İptali
+              cancelPoints = true;
+              _showMineEffect("Kelime İptali! Bu hamlenden puan alamazsın.");
+              break;
+          }
+
+          // Mayını tetiklenmiş olarak işaretle
+          mines[entry.key]!['triggered'] = true;
+
+          // Mayını Firebase'de güncelle
+          await FirebaseFirestore.instance
+              .collection('games')
+              .doc(widget.gameId)
+              .update({
+            "mines.${entry.key}.triggered": true
+          });
+        }
+      }
+
+      // Ödül kontrolü
+      for (var entry in tempPlacedLetters.entries) {
+        // Firebase'den rewards verilerini al
+        final gameDoc = await FirebaseFirestore.instance
+            .collection('games')
+            .doc(widget.gameId)
+            .get();
+
+        final Map<String, dynamic>? rewardsData = gameDoc.data()?['rewards'];
+
+        if (rewardsData != null && rewardsData.containsKey(entry.key) &&
+            rewardsData[entry.key]['collected'] == false) {
+
+          // Ödülü toplandı olarak işaretle
+          await FirebaseFirestore.instance
+              .collection('games')
+              .doc(widget.gameId)
+              .update({
+            "rewards.${entry.key}.collected": true,
+            "rewards.${entry.key}.collectedBy": widget.userId,
+          });
+
+          final rewardType = rewardsData[entry.key]['type'];
+          _showRewardCollected(rewardType);
+
+          setState(() {
+            rewards.add({
+              'type': rewardType,
+              'position': entry.key,
+            });
+          });
+        }
       }
 
       // Şu anki oyun verisini al
@@ -319,49 +998,406 @@ class _GameScreenState extends State<GameScreen> {
       // Mevcut tahta durumunu al
       Map<String, dynamic> currentBoard = (gameDoc.data() as Map<String, dynamic>)['board'] ?? {};
 
-
       // Yeni harfleri ekle
-      currentBoard.addAll(placedLetters);
+      currentBoard.addAll(tempPlacedLetters);
 
-      // Firebase'i tahta durumu, puanlar ve sıra ile güncelle
-      await FirebaseFirestore.instance
-          .collection('games')
-          .doc(widget.gameId)
-          .update({
+      // Puanları hesapla
+      if (cancelPoints) {
+        finalScore = 0;
+      }
+
+      // Firebase güncellemelerini hazırla
+      Map<String, dynamic> updates = {
         "board": currentBoard,
-        "scores.${widget.userId}": FieldValue.increment(moveScore),
         "currentTurn": opponentId, // Sırayı rakibe geçir
         "lastAction": {
           "userId": widget.userId,
           "action": "move",
-          "score": moveScore,
+          "score": finalScore,
           "timestamp": FieldValue.serverTimestamp(),
-        }
-      });
+        },
+        "consecutivePassCount": 0, // Hamle yapıldı, pas sayacını sıfırla
+      };
+
+      // Puan güncellemeleri
+      if (transferPoints) {
+        updates["scores.$opponentId"] = FieldValue.increment(originalScore);
+      } else if (!cancelPoints) {
+        updates["scores.${widget.userId}"] = FieldValue.increment(finalScore);
+      }
+
+      // Firebase'i güncelle
+      await FirebaseFirestore.instance
+          .collection('games')
+          .doc(widget.gameId)
+          .update(updates);
 
       // Kullanılan harfleri çıkar
-      myLetters.removeWhere((l) => placedLetters.values.any((pl) => pl['char'] == l['char'] && !placedLetters.values
-          .where((other) => other != pl)
-          .any((other) => other['char'] == l['char'])));
+      List<int> usedLetterIds = tempPlacedLetters.values.map((l) => l['id'] as int).toList();
+      myLetters.removeWhere((l) => usedLetterIds.contains(l['id']));
+
+      // Harf kaybı mayını tetiklendiyse
+      if (letterLoss) {
+        // Tüm harfleri havuza geri koy ve yeniden 7 harf al
+        await _resetLetters();
+      } else {
+        // Eğer gerekliyse, yeni harfler çek
+        if (myLetters.length < 7) {
+          await _drawNewLetters(7 - myLetters.length);
+        }
+      }
 
       setState(() {
-        placedLetters = {}; // Onayladıktan sonra yerleştirilen harfleri temizle
+        // Onayladıktan sonra yerleştirilen harfleri kalıcı yap
+        for (var entry in tempPlacedLetters.entries) {
+          placedLetters[entry.key] = entry.value;
+          final parts = entry.key.split('-');
+          final row = int.parse(parts[0]);
+          final col = int.parse(parts[1]);
+          board[row][col] = entry.value['char'];
+        }
+
+        tempPlacedLetters = {}; // Geçici harfleri temizle
+        currentWord = '';
+        isWordValid = false;
+        currentWordScore = 0;
         myTurn = false; // Sıranın geçtiğini kullanıcı arayüzünde güncelle
       });
 
-      // Eğer gerekliyse, yeni harfler çek
-      if (myLetters.length < 7) {
-        await _drawNewLetters(7 - myLetters.length);
+      // Oyun sonu kontrolü
+      if (myLetters.isEmpty && letterPoolFlat.isEmpty) {
+        await _endGame('noLetters');
+      }
+
+      String message = "Hamle onaylandı!";
+      if (finalScore > 0) {
+        message += " $finalScore puan kazandın.";
+      } else if (transferPoints) {
+        message += " $originalScore puan rakibe transfer edildi.";
+      } else if (cancelPoints) {
+        message += " Puan iptal edildi.";
       }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Hamle onaylandı! $moveScore puan kazandın.")),
+        SnackBar(content: Text(message)),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Hamle onaylanırken hata: $e")),
       );
     }
+  }
+
+  void _showMineEffect(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.redAccent,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _showRewardCollected(String rewardType) {
+    String message = "Ödül kazandın: ";
+
+    switch (rewardType) {
+      case 'areaRestriction':
+        message += "Bölge Yasağı";
+        break;
+      case 'letterRestriction':
+        message += "Harf Yasağı";
+        break;
+      case 'extraMove':
+        message += "Ekstra Hamle Jokeri";
+        break;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.greenAccent,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _resetLetters() async {
+    // Mevcut harfleri havuza geri koy
+    for (var letter in myLetters) {
+      letterPoolFlat.add({
+        "char": letter['char'],
+        "point": letter['point'],
+      });
+    }
+
+    // Havuzu karıştır
+    letterPoolFlat.shuffle(Random());
+
+    // Harfleri temizle
+    myLetters.clear();
+
+    // Yeni 7 harf al
+    await _drawNewLetters(7);
+  }
+
+  Future<void> _useReward(Map<String, dynamic> reward) async {
+    final rewardType = reward['type'];
+
+    switch (rewardType) {
+      case 'areaRestriction':
+        await _applyAreaRestriction();
+        break;
+      case 'letterRestriction':
+        await _applyLetterRestriction();
+        break;
+      case 'extraMove':
+        await _applyExtraMove();
+        break;
+    }
+
+    // Ödülü kullanıldı olarak işaretle ve listeden kaldır
+    setState(() {
+      rewards.remove(reward);
+    });
+  }
+
+  Future<void> _applyAreaRestriction() async {
+    // Rastgele sağ veya sol tarafı seç
+    final restrictedSide = Random().nextBool() ? 'left' : 'right';
+
+    await FirebaseFirestore.instance
+        .collection('games')
+        .doc(widget.gameId)
+        .update({
+      "restrictions.areaRestriction": {
+        "active": true,
+        "side": restrictedSide,
+        "appliedBy": widget.userId,
+        "appliedTo": opponentId,
+        "expiresAt": FieldValue.serverTimestamp(),
+      }
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Bölge yasağı uygulandı! Rakip ${restrictedSide == 'left' ? 'sol' : 'sağ'} tarafa harf koyamayacak.")),
+    );
+  }
+
+  Future<void> _applyLetterRestriction() async {
+    // Opponent'ın mevcut harflerini al
+    final gameDoc = await FirebaseFirestore.instance
+        .collection('games')
+        .doc(widget.gameId)
+        .get();
+
+    final opponentLetters = List<Map<String, dynamic>>.from(
+        (gameDoc.data() as Map<String, dynamic>)['letters'][opponentId] ?? []);
+
+    if (opponentLetters.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Rakibin elinde harf yok!")),
+      );
+      return;
+    }
+
+    // Rastgele 2 harf seç
+    opponentLetters.shuffle(Random());
+    final restrictedLetters = opponentLetters.take(min(2, opponentLetters.length)).toList();
+
+    await FirebaseFirestore.instance
+        .collection('games')
+        .doc(widget.gameId)
+        .update({
+      "restrictions.letterRestriction": {
+        "active": true,
+        "letterIds": restrictedLetters.map((l) => l['id']).toList(),
+        "appliedBy": widget.userId,
+        "appliedTo": opponentId,
+        "expiresAt": FieldValue.serverTimestamp(),
+      }
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Harf yasağı uygulandı! Rakip bir tur boyunca 2 harfini kullanamayacak.")),
+    );
+  }
+
+  Future<void> _applyExtraMove() async {
+    await FirebaseFirestore.instance
+        .collection('games')
+        .doc(widget.gameId)
+        .update({
+      "extraMove": {
+        "userId": widget.userId,
+        "active": true,
+      }
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Ekstra hamle hakkı kazandın! Bu turu tamamladıktan sonra bir hamle daha yapabileceksin.")),
+    );
+  }
+
+  Future<void> _passMove() async {
+    if (!myTurn) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Şu anda senin sıran değil!")),
+      );
+      return;
+    }
+
+    try {
+      // Şu anki oyun verisini al
+      DocumentSnapshot gameDoc = await FirebaseFirestore.instance
+          .collection('games')
+          .doc(widget.gameId)
+          .get();
+
+      if (!gameDoc.exists) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Oyun bulunamadı!")),
+        );
+        return;
+      }
+
+      // Mevcut pas sayısını al
+      int currentPassCount = (gameDoc.data() as Map<String, dynamic>)['consecutivePassCount'] ?? 0;
+      int newPassCount = currentPassCount + 1;
+
+      // Eğer arka arkaya 2 kez pas geçildiyse oyunu bitir
+      if (newPassCount >= 2) {
+        await _endGame('consecutivePasses');
+        return;
+      }
+
+      // Sırayı rakibe geç ve pas bilgisini kaydet
+      await FirebaseFirestore.instance
+          .collection('games')
+          .doc(widget.gameId)
+          .update({
+        "currentTurn": opponentId,
+        "consecutivePassCount": newPassCount,
+        "lastAction": {
+          "userId": widget.userId,
+          "action": "pass",
+          "timestamp": FieldValue.serverTimestamp(),
+        }
+      });
+
+      // Kullanıcı arayüzünde sırayı güncelle
+      setState(() {
+        myTurn = false;
+        consecutivePassCount = newPassCount;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Pas geçildi, sıra rakibe geçti.")),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Pas geçerken hata: $e")),
+      );
+    }
+  }
+
+  Future<void> _endGame(String reason) async {
+    // Şu anki oyun verisini al
+    DocumentSnapshot gameDoc = await FirebaseFirestore.instance
+        .collection('games')
+        .doc(widget.gameId)
+        .get();
+
+    final gameData = gameDoc.data() as Map<String, dynamic>;
+
+    // Puanları al
+    int myFinalScore = gameData['scores']?[widget.userId] ?? 0;
+    int opponentFinalScore = gameData['scores']?[opponentId] ?? 0;
+
+    // Eğer oyun harfler bittiği için bitiyorsa, kalan harflerin puanlarını hesapla
+    if (reason == 'noLetters') {
+      // Rakibin kalan harflerini al
+      final opponentLetters = List<Map<String, dynamic>>.from(
+          gameData['letters'][opponentId] ?? []);
+
+      // Rakibin kalan harflerinin puanlarını topla
+      int remainingPoints = 0;
+      for (var letter in opponentLetters) {
+        remainingPoints += letter['point'] as int;
+      }
+
+      // Bu puanları kullanıcıya ekle, rakipten düş
+      myFinalScore += remainingPoints;
+      opponentFinalScore -= remainingPoints;
+    }
+
+    // Kazananı belirle
+    String winner;
+    if (myFinalScore > opponentFinalScore) {
+      winner = widget.userId;
+    } else if (opponentFinalScore > myFinalScore) {
+      winner = opponentId;
+    } else {
+      winner = 'draw'; // Beraberlik
+    }
+
+    // Oyun sonucu güncelle
+    await FirebaseFirestore.instance
+        .collection('games')
+        .doc(widget.gameId)
+        .update({
+      "status": "completed",
+      "endReason": reason,
+      "endTime": FieldValue.serverTimestamp(),
+      "winner": winner,
+      "finalScores": {
+        widget.userId: myFinalScore,
+        opponentId: opponentFinalScore,
+      }
+    });
+
+    // Oyun sonu dialogunu göster
+    _showGameEndDialog(winner == widget.userId, reason);
+  }
+
+  Future<void> _surrender() async {
+    // Show confirmation dialog
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Teslim Ol"),
+        content: const Text("Gerçekten teslim olmak istiyor musun? Bu oyunu kaybetmiş sayılacaksın."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Vazgeç"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text("Teslim Ol"),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    // End the game with surrender
+    await FirebaseFirestore.instance
+        .collection('games')
+        .doc(widget.gameId)
+        .update({
+      "status": "completed",
+      "winner": opponentId,
+      "endReason": "surrender",
+      "endTime": FieldValue.serverTimestamp(),
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Oyun teslim olarak sona erdi.")),
+    );
+
+    Navigator.pop(context); // Return to previous screen
   }
 
   Widget _buildTopBar() {
@@ -410,7 +1446,9 @@ class _GameScreenState extends State<GameScreen> {
         itemBuilder: (context, index) {
           final row = index ~/ 15;
           final col = index % 15;
-          final placed = placedLetters['$row-$col']?['char'] ?? board[row][col];
+          final placedChar = board[row][col];
+          final tempChar = tempPlacedLetters['$row-$col']?['char'] ?? '';
+          final displayChar = tempChar.isNotEmpty ? tempChar : placedChar;
 
           // Determine cell color based on special cells
           Color cellColor = Colors.white;
@@ -450,33 +1488,130 @@ class _GameScreenState extends State<GameScreen> {
             cellColor = Colors.red[300]!;
           }
 
-          // If there's a letter placed, change color to amber
-          if (placed.isNotEmpty) {
+          // If there's a permanent letter placed, change color to amber
+          if (placedChar.isNotEmpty) {
             cellColor = Colors.amber;
           }
 
+          // If there's a temporary letter placed, change color to light green or red based on validation
+          if (tempChar.isNotEmpty) {
+            cellColor = isWordValid ? Colors.lightGreen : Colors.red[300]!;
+          }
+
           return DragTarget<Map<String, dynamic>>(
-            onWillAccept: (_) => placed.isEmpty && myTurn,
+            onWillAccept: (data) {
+              // Eğer hücrede zaten bir harf varsa veya oyuncunun turnu değilse kabul etme
+              if (!myTurn || displayChar.isNotEmpty) return false;
+
+              // İlk hamle kontrolü
+              bool isFirstMove = board.every((row) => row.every((cell) => cell.isEmpty)) &&
+                  tempPlacedLetters.isEmpty;
+
+              if (isFirstMove) {
+                // İlk hamle sadece merkez hücreye yapılabilir
+                return row == 7 && col == 7;
+              }
+
+              // İlk harf için: Mevcut tahtadaki herhangi bir harfe bitişik olmalı
+              if (tempPlacedLetters.isEmpty) {
+                List<List<int>> directions = [
+                  [row - 1, col], // yukarı
+                  [row + 1, col], // aşağı
+                  [row, col - 1], // sol
+                  [row, col + 1]  // sağ
+                ];
+
+                for (var dir in directions) {
+                  int r = dir[0];
+                  int c = dir[1];
+                  if (r >= 0 && r < 15 && c >= 0 && c < 15) {
+                    if (board[r][c].isNotEmpty) {
+                      return true;
+                    }
+                  }
+                }
+                return false;
+              }
+
+              // Sonraki harfler için: Zaten yerleştirilmiş geçici harflere bitişik olmalı
+              // Aynı zamanda aynı satır veya sütunda olmalı
+              List<String> placedPositions = tempPlacedLetters.keys.toList();
+              bool allSameRow = true;
+              bool allSameCol = true;
+              int? commonRow, commonCol;
+
+              // Yön tespiti
+              if (placedPositions.isNotEmpty) {
+                List<int> parts = placedPositions[0].split('-').map(int.parse).toList();
+                commonRow = parts[0];
+                commonCol = parts[1];
+
+                for (var pos in placedPositions) {
+                  List<int> posParts = pos.split('-').map(int.parse).toList();
+                  if (posParts[0] != commonRow) allSameRow = false;
+                  if (posParts[1] != commonCol) allSameCol = false;
+                }
+              }
+
+              // Yeni harf yerleştirme, mevcut yöne uygun olmalı
+              if (allSameRow && row == commonRow) {
+                // Yatay yerleştirme
+                return true;
+              } else if (allSameCol && col == commonCol) {
+                // Dikey yerleştirme
+                return true;
+              }
+
+              return false;
+            },
             onAccept: (data) {
               if (!myTurn) return;
 
               setState(() {
-                placedLetters['$row-$col'] = data;
-                myLetters.removeWhere((l) => l['char'] == data['char'] &&
-                    !placedLetters.values.any((pl) => pl['char'] == l['char'] && pl != data));
+                tempPlacedLetters['$row-$col'] = data;
+                myLetters.removeWhere((l) => l['id'] == data['id']);
+                _updateCurrentWord();
               });
             },
-            builder: (context, _, __) {
-              return Container(
-                margin: const EdgeInsets.all(1),
-                decoration: BoxDecoration(
-                  color: cellColor,
-                  border: Border.all(color: Colors.grey.shade400),
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  placed,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+            builder: (context, candidateData, rejectedData) {
+              return GestureDetector(
+                onTap: () {
+                  if (myTurn && tempPlacedLetters.containsKey('$row-$col')) {
+                    print("Removing letter from $row-$col"); // Debug için
+                    setState(() {
+                      final letter = tempPlacedLetters['$row-$col']!;
+                      myLetters.add(letter);
+                      tempPlacedLetters.remove('$row-$col');
+                      _updateCurrentWord();
+                    });
+                  }
+                },
+                child: Container(
+                  margin: const EdgeInsets.all(1),
+                  decoration: BoxDecoration(
+                    color: cellColor,
+                    border: Border.all(color: Colors.grey.shade400),
+                  ),
+                  alignment: Alignment.center,
+                  child: Stack(
+                    children: [
+                      Center(
+                        child: Text(
+                          displayChar,
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      if (tempChar.isNotEmpty)
+                        Positioned(
+                          bottom: 2,
+                          right: 4,
+                          child: Text(
+                            (tempPlacedLetters['$row-$col']?['point'] ?? '').toString(),
+                            style: const TextStyle(fontSize: 8),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               );
             },
@@ -490,18 +1625,84 @@ class _GameScreenState extends State<GameScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       color: Colors.indigo[800],
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: myLetters.map((letter) {
-          return Draggable<Map<String, dynamic>>(
-            data: letter,
-            feedback: _buildLetterTile(letter),
-            childWhenDragging: _buildLetterTile({"char": "", "point": ""}),
-            child: _buildLetterTile(letter),
-          );
-        }).toList(),
+      child: Column(
+        children: [
+          if (currentWord.isNotEmpty)
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: isWordValid ? Colors.green : Colors.red,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    "Kelime: $currentWord",
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    "Puan: $currentWordScore",
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ],
+              ),
+            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: myLetters.map((letter) {
+              return Draggable<Map<String, dynamic>>(
+                data: letter,
+                feedback: _buildLetterTile(letter),
+                childWhenDragging: _buildLetterTile({"char": "", "point": 0}),
+                child: _buildLetterTile(letter),
+              );
+            }).toList(),
+          ),
+          if (rewards.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: rewards.map((reward) {
+                  return GestureDetector(
+                    onTap: () => _useReward(reward),
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      margin: const EdgeInsets.symmetric(horizontal: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.green[700],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: Icon(
+                        _getRewardIcon(reward['type']),
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+        ],
       ),
     );
+  }
+
+  IconData _getRewardIcon(String type) {
+    switch (type) {
+      case 'areaRestriction':
+        return Icons.block;
+      case 'letterRestriction':
+        return Icons.text_fields;
+      case 'extraMove':
+        return Icons.add_circle;
+      default:
+        return Icons.star;
+    }
   }
 
   Widget _buildLetterTile(Map<String, dynamic> letter) {
@@ -547,96 +1748,6 @@ class _GameScreenState extends State<GameScreen> {
         ],
       ),
     );
-  }
-
-// Pas geçme fonksiyonunu düzelt
-  Future<void> _passMove() async {
-    if (!myTurn) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Şu anda senin sıran değil!")),
-      );
-      return;
-    }
-
-    try {
-      // Şu anki oyun verisini al
-      DocumentSnapshot gameDoc = await FirebaseFirestore.instance
-          .collection('games')
-          .doc(widget.gameId)
-          .get();
-
-      if (!gameDoc.exists) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Oyun bulunamadı!")),
-        );
-        return;
-      }
-
-      // Sırayı rakibe geç ve pas bilgisini kaydet
-      await FirebaseFirestore.instance
-          .collection('games')
-          .doc(widget.gameId)
-          .update({
-        "currentTurn": opponentId,
-        "lastAction": {
-          "userId": widget.userId,
-          "action": "pass",
-          "timestamp": FieldValue.serverTimestamp(),
-        }
-      });
-
-      // Kullanıcı arayüzünde sırayı güncelle
-      setState(() {
-        myTurn = false;
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Pas geçildi, sıra rakibe geçti.")),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Pas geçerken hata: $e")),
-      );
-    }
-  }
-  Future<void> _surrender() async {
-    // Show confirmation dialog
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Teslim Ol"),
-        content: const Text("Gerçekten teslim olmak istiyor musun? Bu oyunu kaybetmiş sayılacaksın."),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text("Vazgeç"),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text("Teslim Ol"),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm != true) return;
-
-    // End the game with surrender
-    await FirebaseFirestore.instance
-        .collection('games')
-        .doc(widget.gameId)
-        .update({
-      "status": "completed",
-      "winner": opponentId,
-      "endReason": "surrender",
-      "endTime": FieldValue.serverTimestamp(),
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Oyun teslim olarak sona erdi.")),
-    );
-
-    Navigator.pop(context); // Return to previous screen
   }
 
   Widget _actionButton(String text, IconData icon, Color color, VoidCallback onPressed) {
