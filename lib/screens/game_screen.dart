@@ -27,6 +27,9 @@ class _GameScreenState extends State<GameScreen> {
   int opponentScore = 0;
   bool myTurn = false;
 
+  bool hasAreaRestriction = false;
+  String restrictedSide = '';
+
   // Kelime listesi
   Set<String> validWords = {};
   bool isWordValid = false;
@@ -89,6 +92,60 @@ class _GameScreenState extends State<GameScreen> {
     _loadGameData();
     _setupGameListener();
     _setupMinesAndRewards();
+    _checkRestrictions();
+  }
+
+
+  String turkishLowerCase(String text) {
+    final Map<String, String> turkishChars = {
+      'I': 'ı', // Büyük I -> küçük ı
+      'İ': 'i', // Büyük İ -> küçük i
+      'Ç': 'ç',
+      'Ğ': 'ğ',
+      'Ö': 'ö',
+      'Ş': 'ş',
+      'Ü': 'ü',
+    };
+
+    String result = text;
+    turkishChars.forEach((key, value) {
+      result = result.replaceAll(key, value);
+    });
+
+    // Geriye kalan karakterler için normal toLowerCase kullan
+    return result.toLowerCase();
+  }
+
+
+  // Kısıtlamaları kontrol eden yeni bir fonksiyon
+  void _checkRestrictions() {
+    FirebaseFirestore.instance
+        .collection('games')
+        .doc(widget.gameId)
+        .snapshots()
+        .listen((snapshot) {
+      if (!snapshot.exists) return;
+
+      final gameData = snapshot.data();
+      Map<String, dynamic>? restrictions = gameData?['restrictions'];
+
+      setState(() {
+        // Bölge kısıtlaması kontrol et
+        if (restrictions != null &&
+            restrictions.containsKey('areaRestriction') &&
+            restrictions['areaRestriction'] != null &&
+            restrictions['areaRestriction']['active'] == true &&
+            restrictions['areaRestriction']['appliedTo'] == widget.userId) {
+
+          hasAreaRestriction = true;
+          restrictedSide = restrictions['areaRestriction']['side'] ?? 'right';
+
+          print("Bölge kısıtlaması aktif: $restrictedSide tarafı kısıtlı");
+        } else {
+          hasAreaRestriction = false;
+        }
+      });
+    });
   }
 
   Future<void> _loadWordList() async {
@@ -97,56 +154,95 @@ class _GameScreenState extends State<GameScreen> {
       final String data = await rootBundle.loadString('assets/turkish_words.txt');
       final List<String> words = LineSplitter.split(data).toList();
 
-      validWords = Set<String>.from(words);
+      validWords = Set<String>.from(words.map((w) => turkishLowerCase(w)));
     } catch (e) {
       debugPrint('Error loading word list: $e');
     }
   }
 
-  void _setupMinesAndRewards() {
-    // Mayınların yerleştirilmesi
-    _placeMines([
-      {'type': 'pointDivision', 'count': 5}, // Puan Bölünmesi
-      {'type': 'pointTransfer', 'count': 4}, // Puan Transferi
-      {'type': 'letterLoss', 'count': 3},    // Harf Kaybı
-      {'type': 'bonusBlock', 'count': 2},    // Ekstra Hamle Engeli
-      {'type': 'wordCancel', 'count': 2},    // Kelime İptali
-    ]);
+  void _setupMinesAndRewards() async {
+    try {
+      // Mevcut mayın ve ödül yapılandırmasını kontrol et
+      DocumentSnapshot gameDoc = await FirebaseFirestore.instance
+          .collection('games')
+          .doc(widget.gameId)
+          .get();
 
-    // Ödüllerin yerleştirilmesi
-    _placeRewards([
-      {'type': 'areaRestriction', 'count': 2}, // Bölge Yasağı
-      {'type': 'letterRestriction', 'count': 3}, // Harf Yasağı
-      {'type': 'extraMove', 'count': 2},       // Ekstra Hamle Jokeri
-    ]);
+      Map<String, dynamic>? data = gameDoc.data() as Map<String, dynamic>?;
+
+      // Eğer mayınlar zaten oluşturulmuşsa, onları yükle
+      if (data != null && data.containsKey('mines')) {
+        mines = Map<String, Map<String, dynamic>>.from(data['mines']);
+        print("Mayınlar yüklendi: ${mines.length}");
+      } else {
+        // Mayınlar oluşturulmamışsa yeni mayınlar oluştur
+        _placeMines([
+          {'type': 'pointDivision', 'count': 5}, // Puan Bölünmesi
+          {'type': 'pointTransfer', 'count': 4}, // Puan Transferi
+          {'type': 'letterLoss', 'count': 3},    // Harf Kaybı
+          {'type': 'bonusBlock', 'count': 2},    // Ekstra Hamle Engeli
+          {'type': 'wordCancel', 'count': 2},    // Kelime İptali
+        ]);
+
+        // Mayınları Firebase'e kaydet
+        await FirebaseFirestore.instance
+            .collection('games')
+            .doc(widget.gameId)
+            .update({"mines": mines});
+
+        print("Yeni mayınlar oluşturuldu ve kaydedildi: ${mines.length}");
+      }
+
+      // Benzer şekilde ödülleri kontrol et ve oluştur
+      if (data != null && data.containsKey('rewards')) {
+        // Ödülleri yükle
+        print("Ödüller mevcut, yükleniyor");
+      } else {
+        // Ödülleri oluştur
+        _placeRewards([
+          {'type': 'areaRestriction', 'count': 2}, // Bölge Yasağı
+          {'type': 'letterRestriction', 'count': 3}, // Harf Yasağı
+          {'type': 'extraMove', 'count': 2},       // Ekstra Hamle Jokeri
+        ]);
+
+        print("Yeni ödüller oluşturuldu");
+      }
+    } catch (e) {
+      print("Mayın ve ödül kurulumu hatası: $e");
+    }
   }
 
   void _placeMines(List<Map<String, dynamic>> mineTypes) {
     Random random = Random();
-    List<String> positions = [];
+    Set<String> positions = {}; // Benzersiz konumları tutmak için Set kullanıyoruz
 
     // Mayınların yerleştirileceği rastgele konumları belirle
     for (var mineType in mineTypes) {
-      for (int i = 0; i < mineType['count']; i++) {
+      String type = mineType['type'];
+      int count = mineType['count'];
+
+      print("Yerleştiriliyor: $count adet $type mayını");
+
+      for (int i = 0; i < count; i++) {
         String position;
-        int newRow;
-        int newCol;
+        int newRow, newCol;
 
         do {
           newRow = random.nextInt(15);
           newCol = random.nextInt(15);
           position = '$newRow-$newCol';
-        } while (positions.contains(position) || (newRow == 7 && newCol == 7)); // Merkezi boş bırak
+        } while (positions.contains(position) || (newRow == 7 && newCol == 7));
 
         positions.add(position);
         mines[position] = {
-          'type': mineType['type'],
+          'type': type,
           'triggered': false,
         };
+
+        print("Mayın yerleştirildi: $type -> $position");
       }
     }
   }
-
   void _placeRewards(List<Map<String, dynamic>> rewardTypes) {
     Random random = Random();
     List<String> positions = [];
@@ -273,8 +369,40 @@ class _GameScreenState extends State<GameScreen> {
         remainingLettersCount = letterPoolFlat.length;
       }
 
-      // Load player letters
+      // Load player letters and calculate max ID
       final lettersMap = gameData['letters'] ?? {};
+      int maxId = 0;
+
+      // Tüm oyuncuların tüm harflerini tarayarak en yüksek ID'yi bul
+      lettersMap.forEach((playerId, playerLetters) {
+        if (playerLetters is List) {
+          for (var letter in playerLetters) {
+            if (letter is Map && letter.containsKey('id')) {
+              int letterId = letter['id'] as int;
+              if (letterId > maxId) {
+                maxId = letterId;
+              }
+            }
+          }
+        }
+      });
+
+      // Tahta üzerindeki harfleri de kontrol et
+      if (gameData['board'] != null) {
+        final boardData = Map<String, dynamic>.from(gameData['board']);
+        for (var letter in boardData.values) {
+          if (letter is Map && letter.containsKey('id')) {
+            int letterId = letter['id'] as int;
+            if (letterId > maxId) {
+              maxId = letterId;
+            }
+          }
+        }
+      }
+
+      // nextLetterId'yi en yüksek ID'nin bir fazlası olarak ayarla
+      nextLetterId = maxId + 1;
+      print("nextLetterId $nextLetterId olarak ayarlandı");
 
       if (lettersMap[widget.userId] == null) {
         // Kullanıcının harfleri yoksa, havuzdan 7 harf dağıt
@@ -306,11 +434,29 @@ class _GameScreenState extends State<GameScreen> {
 
       final gameData = snapshot.data()!;
 
-      // Update scores
       setState(() {
+        // Update scores
         myScore = gameData['scores']?[widget.userId] ?? 0;
         opponentScore = gameData['scores']?[opponentId] ?? 0;
-        myTurn = gameData['currentTurn'] == widget.userId;
+
+        // Sıra kontrolü - Ekstra hamle varsa dikkate al
+        Map<String, dynamic>? extraMove = gameData['extraMove'];
+        if (extraMove != null && extraMove['active'] == true && extraMove['userId'] == widget.userId) {
+          // Ekstra hamle hakkı var
+          myTurn = true;
+          // Ekstra hamleyi kullanıldı olarak işaretle
+          FirebaseFirestore.instance
+              .collection('games')
+              .doc(widget.gameId)
+              .update({
+            "extraMove.active": false,
+            "currentTurn": widget.userId,
+          });
+        } else {
+          // Normal sıra kontrolü
+          myTurn = gameData['currentTurn'] == widget.userId;
+        }
+
         consecutivePassCount = gameData['consecutivePassCount'] ?? 0;
 
         // Check if game ended
@@ -352,7 +498,9 @@ class _GameScreenState extends State<GameScreen> {
           rewards.clear();
           final Map<String, dynamic> rewardsData = gameData['rewards'];
           for (var entry in rewardsData.entries) {
-            if (entry.value['collected'] == true && entry.value['collectedBy'] == widget.userId) {
+            if (entry.value['collected'] == true &&
+                entry.value['collectedBy'] == widget.userId &&
+                entry.value['used'] != true) {
               rewards.add({
                 'type': entry.value['type'],
                 'position': entry.key,
@@ -360,10 +508,43 @@ class _GameScreenState extends State<GameScreen> {
             }
           }
         }
+
+        // Kısıtlamalar kontrol et
+        Map<String, dynamic>? restrictions = gameData['restrictions'];
+        if (restrictions != null) {
+          // Bölge kısıtlaması kontrol et
+          if (restrictions['areaRestriction'] != null &&
+              restrictions['areaRestriction']['active'] == true &&
+              restrictions['areaRestriction']['appliedTo'] == widget.userId) {
+            // Kısıtlama var, kullanıcıya göster
+            String side = restrictions['areaRestriction']['side'] ?? 'right';
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text("Dikkat! ${side == 'left' ? 'Sol' : 'Sağ'} tarafa harf koyamazsın."),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 5),
+              ),
+            );
+          }
+
+          // Harf kısıtlaması kontrol et
+          if (restrictions['letterRestriction'] != null &&
+              restrictions['letterRestriction']['active'] == true &&
+              restrictions['letterRestriction']['appliedTo'] == widget.userId) {
+            // Kısıtlama var, kullanıcıya göster
+            List<dynamic> letterIds = restrictions['letterRestriction']['letterIds'];
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text("Dikkat! Bazı harflerin donduruldu, bu tur kullanamayacaksın."),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 5),
+              ),
+            );
+          }
+        }
       });
     });
   }
-
   void _showGameEndDialog(bool isWinner, String? reason) {
     if (context.mounted) {
       showDialog(
@@ -410,6 +591,7 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
+// Harf dağıtma
   Future<void> _distributeInitialLetters() async {
     if (letterPoolFlat.isEmpty) return;
 
@@ -418,7 +600,7 @@ class _GameScreenState extends State<GameScreen> {
     final userLetters = letterPoolFlat.take(count).map((letter) {
       return {
         ...letter,
-        "id": nextLetterId++, // Her harfe benzersiz bir ID ekliyoruz
+        "id": nextLetterId++, // Benzersiz ID ata ve arttır
       };
     }).toList();
 
@@ -432,7 +614,6 @@ class _GameScreenState extends State<GameScreen> {
         .get();
 
     Map<String, dynamic> currentLetters = (gameDoc.data() as Map<String, dynamic>)['letters'] ?? {};
-
 
     // Kullanıcının harflerini güncelle, diğer oyuncunun harflerini koru
     currentLetters[widget.userId] = userLetters;
@@ -452,6 +633,7 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
+  // Yeni harf çekme fonksiyonunu da düzeltelim
   Future<void> _drawNewLetters(int count) async {
     if (letterPoolFlat.isEmpty) return;
 
@@ -461,7 +643,7 @@ class _GameScreenState extends State<GameScreen> {
     final newLetters = letterPoolFlat.take(drawCount).map((letter) {
       return {
         ...letter,
-        "id": nextLetterId++, // Her harfe benzersiz bir ID ekliyoruz
+        "id": nextLetterId++, // Benzersiz ID ata ve arttır
       };
     }).toList();
     letterPoolFlat.removeRange(0, drawCount);
@@ -475,7 +657,6 @@ class _GameScreenState extends State<GameScreen> {
         .get();
 
     Map<String, dynamic> currentLetters = (gameDoc.data() as Map<String, dynamic>)['letters'] ?? {};
-
 
     // Kullanıcının harflerini güncelle, diğer oyuncunun harflerini koru
     currentLetters[widget.userId] = updatedLetters;
@@ -908,7 +1089,8 @@ class _GameScreenState extends State<GameScreen> {
       bool passesThroughCenter = tempPlacedLetters.containsKey('7-7');
       if (!passesThroughCenter) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("İlk hamle merkez hücreden (7,7) geçmelidir!")),
+          const SnackBar(
+              content: Text("İlk hamle merkez hücreden (7,7) geçmelidir!")),
         );
         return;
       }
@@ -917,7 +1099,8 @@ class _GameScreenState extends State<GameScreen> {
     // Kelime yerleştirme kurallarını kontrol et
     if (!_isValidWordPlacement()) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Geçersiz yerleştirme! Kelime tahtadaki harflere bağlı olmalı.")),
+        const SnackBar(content: Text(
+            "Geçersiz yerleştirme! Kelime tahtadaki harflere bağlı olmalı.")),
       );
       return;
     }
@@ -926,7 +1109,8 @@ class _GameScreenState extends State<GameScreen> {
     _updateCurrentWord();
     if (!isWordValid) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Geçersiz kelime! Türkçe kelime listesinde bulunamadı.")),
+        const SnackBar(content: Text(
+            "Geçersiz kelime! Türkçe kelime listesinde bulunamadı.")),
       );
       return;
     }
@@ -940,51 +1124,66 @@ class _GameScreenState extends State<GameScreen> {
       bool letterLoss = false;
       bool disableBonuses = false;
 
+      print("Mayınlar kontrol ediliyor. Toplam mayın: ${mines.length}");
+
       // Mayın kontrolü
       for (var entry in tempPlacedLetters.entries) {
-        if (mines.containsKey(entry.key) && mines[entry.key]!['triggered'] == false) {
-          final mineType = mines[entry.key]!['type'];
+        final position = entry.key;
+        if (mines.containsKey(position) &&
+            mines[position]!['triggered'] == false) {
+          final mineType = mines[position]!['type'];
+          print("Mayın bulundu! Konum: $position, Tip: $mineType");
 
           switch (mineType) {
             case 'pointDivision': // Puan Bölünmesi
               finalScore = (originalScore * 0.3).round();
               _showMineEffect("Puan Bölünmesi! Puanın %30'u alındı.");
+              print(
+                  "Puan Bölünmesi uygulandı. Orjinal: $originalScore, Yeni: $finalScore");
               break;
             case 'pointTransfer': // Puan Transferi
               transferPoints = true;
               _showMineEffect("Puan Transferi! Puanın rakibe gitti.");
+              print(
+                  "Puan Transferi uygulandı. Transfer edilecek puan: $originalScore");
               break;
             case 'letterLoss': // Harf Kaybı
               letterLoss = true;
               _showMineEffect("Harf Kaybı! Elindeki harfler yenilenecek.");
+              print("Harf Kaybı uygulandı.");
               break;
             case 'bonusBlock': // Ekstra Hamle Engeli
               disableBonuses = true;
               if (originalScore != finalScore) {
-                _showMineEffect("Ekstra Hamle Engeli! Bonus puanlar iptal edildi.");
+                _showMineEffect(
+                    "Ekstra Hamle Engeli! Bonus puanlar iptal edildi.");
+                print("Ekstra Hamle Engeli uygulandı.");
               }
               break;
             case 'wordCancel': // Kelime İptali
               cancelPoints = true;
               _showMineEffect("Kelime İptali! Bu hamlenden puan alamazsın.");
+              print("Kelime İptali uygulandı.");
               break;
           }
 
           // Mayını tetiklenmiş olarak işaretle
-          mines[entry.key]!['triggered'] = true;
+          mines[position]!['triggered'] = true;
 
           // Mayını Firebase'de güncelle
           await FirebaseFirestore.instance
               .collection('games')
               .doc(widget.gameId)
               .update({
-            "mines.${entry.key}.triggered": true
+            "mines.$position.triggered": true
           });
         }
       }
 
       // Ödül kontrolü
       for (var entry in tempPlacedLetters.entries) {
+        final position = entry.key;
+
         // Firebase'den rewards verilerini al
         final gameDoc = await FirebaseFirestore.instance
             .collection('games')
@@ -993,27 +1192,31 @@ class _GameScreenState extends State<GameScreen> {
 
         final Map<String, dynamic>? rewardsData = gameDoc.data()?['rewards'];
 
-        if (rewardsData != null && rewardsData.containsKey(entry.key) &&
-            rewardsData[entry.key]['collected'] == false) {
+        if (rewardsData != null && rewardsData.containsKey(position) &&
+            rewardsData[position]['collected'] == false) {
+          print(
+              "Ödül bulundu! Konum: $position, Tip: ${rewardsData[position]['type']}");
 
           // Ödülü toplandı olarak işaretle
           await FirebaseFirestore.instance
               .collection('games')
               .doc(widget.gameId)
               .update({
-            "rewards.${entry.key}.collected": true,
-            "rewards.${entry.key}.collectedBy": widget.userId,
+            "rewards.$position.collected": true,
+            "rewards.$position.collectedBy": widget.userId,
           });
 
-          final rewardType = rewardsData[entry.key]['type'];
+          final rewardType = rewardsData[position]['type'];
           _showRewardCollected(rewardType);
 
           setState(() {
             rewards.add({
               'type': rewardType,
-              'position': entry.key,
+              'position': position,
             });
           });
+
+          print("Ödül toplandı: $rewardType");
         }
       }
 
@@ -1031,14 +1234,16 @@ class _GameScreenState extends State<GameScreen> {
       }
 
       // Mevcut tahta durumunu al
-      Map<String, dynamic> currentBoard = (gameDoc.data() as Map<String, dynamic>)['board'] ?? {};
+      Map<String, dynamic> currentBoard = (gameDoc.data() as Map<String,
+          dynamic>)['board'] ?? {};
 
       // Yeni harfleri ekle
       currentBoard.addAll(tempPlacedLetters);
 
-      // Puanları hesapla
+      // Puanları hesapla ve güncelle
       if (cancelPoints) {
         finalScore = 0;
+        print("Puanlar iptal edildi.");
       }
 
       // Firebase güncellemelerini hazırla
@@ -1057,8 +1262,10 @@ class _GameScreenState extends State<GameScreen> {
       // Puan güncellemeleri
       if (transferPoints) {
         updates["scores.$opponentId"] = FieldValue.increment(originalScore);
+        print("Rakibe $originalScore puan transfer edildi.");
       } else if (!cancelPoints) {
         updates["scores.${widget.userId}"] = FieldValue.increment(finalScore);
+        print("Oyuncuya $finalScore puan eklendi.");
       }
 
       // Firebase'i güncelle
@@ -1068,12 +1275,13 @@ class _GameScreenState extends State<GameScreen> {
           .update(updates);
 
       // Kullanılan harfleri çıkar
-      List<int> usedLetterIds = tempPlacedLetters.values.map((l) => l['id'] as int).toList();
+      List<int> usedLetterIds = tempPlacedLetters.values.map((
+          l) => l['id'] as int).toList();
       myLetters.removeWhere((l) => usedLetterIds.contains(l['id']));
 
       // Harf kaybı mayını tetiklendiyse
       if (letterLoss) {
-        // Tüm harfleri havuza geri koy ve yeniden 7 harf al
+        print("Harf Kaybı etkisi uygulanıyor. Tüm harfler yenilenecek.");
         await _resetLetters();
       } else {
         // Eğer gerekliyse, yeni harfler çek
@@ -1117,12 +1325,12 @@ class _GameScreenState extends State<GameScreen> {
         SnackBar(content: Text(message)),
       );
     } catch (e) {
+      print("Hamle onaylanırken hata: $e");
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Hamle onaylanırken hata: $e")),
       );
     }
   }
-
   void _showMineEffect(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -1157,6 +1365,7 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
+  // Harf resetleme
   Future<void> _resetLetters() async {
     // Mevcut harfleri havuza geri koy
     for (var letter in myLetters) {
@@ -1172,90 +1381,207 @@ class _GameScreenState extends State<GameScreen> {
     // Harfleri temizle
     myLetters.clear();
 
-    // Yeni 7 harf al
+    // Yeni 7 harf al (benzersiz ID'lerle)
     await _drawNewLetters(7);
   }
 
   Future<void> _useReward(Map<String, dynamic> reward) async {
     final rewardType = reward['type'];
+    print("Ödül kullanılıyor: $rewardType");
 
-    switch (rewardType) {
-      case 'areaRestriction':
-        await _applyAreaRestriction();
-        break;
-      case 'letterRestriction':
-        await _applyLetterRestriction();
-        break;
-      case 'extraMove':
-        await _applyExtraMove();
-        break;
+    try {
+      // Ödülü uygula
+      switch (rewardType) {
+        case 'areaRestriction':
+          await _applyAreaRestriction();
+          break;
+        case 'letterRestriction':
+          await _applyLetterRestriction();
+          break;
+        case 'extraMove':
+          await _applyExtraMove();
+          break;
+      }
+
+      // Ödülü kullanıldı olarak işaretle ve listeden kaldır
+      setState(() {
+        rewards.removeWhere((r) =>
+        r['type'] == rewardType &&
+            r['position'] == reward['position']);
+      });
+
+      // Firebase'den de kaldır
+      try {
+        DocumentSnapshot gameDoc = await FirebaseFirestore.instance
+            .collection('games')
+            .doc(widget.gameId)
+            .get();
+
+        if (!gameDoc.exists) {
+          print("Oyun belgesi bulunamadı");
+          return;
+        }
+
+        Map<String, dynamic>? gameData = gameDoc.data() as Map<String, dynamic>?;
+        if (gameData == null) {
+          print("Oyun verisi boş");
+          return;
+        }
+
+        Map<String, dynamic>? rewardsData = gameData['rewards'] as Map<String, dynamic>?;
+        if (rewardsData == null) {
+          print("Ödül verisi bulunamadı");
+          return;
+        }
+
+        // Kullanılan ödülü bul ve işaretle
+        for (String key in rewardsData.keys) {
+          Map<String, dynamic>? rewardData = rewardsData[key] as Map<String, dynamic>?;
+          if (rewardData == null) continue;
+
+          bool? collected = rewardData['collected'] as bool?;
+          String? collectedBy = rewardData['collectedBy'] as String?;
+          bool? used = rewardData['used'] as bool?;
+          String? type = rewardData['type'] as String?;
+
+          if (collected == true &&
+              collectedBy == widget.userId &&
+              used != true &&
+              type == rewardType) {
+
+            await FirebaseFirestore.instance
+                .collection('games')
+                .doc(widget.gameId)
+                .update({
+              "rewards.$key.used": true,
+            });
+
+            print("Ödül kullanıldı olarak işaretlendi: $key");
+            break;
+          }
+        }
+      } catch (e) {
+        print("Firebase ödül güncellemesi sırasında hata: $e");
+      }
+    } catch (e) {
+      print("Ödül kullanılırken hata: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Ödül kullanılırken hata: $e")),
+      );
     }
-
-    // Ödülü kullanıldı olarak işaretle ve listeden kaldır
-    setState(() {
-      rewards.remove(reward);
-    });
   }
 
   Future<void> _applyAreaRestriction() async {
-    // Rastgele sağ veya sol tarafı seç
-    final restrictedSide = Random().nextBool() ? 'left' : 'right';
+    try {
+      // Rastgele sağ veya sol tarafı seç
+      final restrictedSide = Random().nextBool() ? 'left' : 'right';
 
-    await FirebaseFirestore.instance
-        .collection('games')
-        .doc(widget.gameId)
-        .update({
-      "restrictions.areaRestriction": {
+      // Önce restrictions'ı oku
+      DocumentSnapshot gameDoc = await FirebaseFirestore.instance
+          .collection('games')
+          .doc(widget.gameId)
+          .get();
+
+      Map<String, dynamic>? gameData = gameDoc.data() as Map<String, dynamic>?;
+      Map<String, dynamic> restrictions = {};
+
+      if (gameData != null && gameData.containsKey('restrictions')) {
+        restrictions = Map<String, dynamic>.from(gameData['restrictions']);
+      }
+
+      // Mevcut kısıtlamalara bölge kısıtlamasını ekle
+      restrictions['areaRestriction'] = {
         "active": true,
         "side": restrictedSide,
         "appliedBy": widget.userId,
         "appliedTo": opponentId,
         "expiresAt": FieldValue.serverTimestamp(),
-      }
-    });
+      };
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Bölge yasağı uygulandı! Rakip ${restrictedSide == 'left' ? 'sol' : 'sağ'} tarafa harf koyamayacak.")),
-    );
+      // Güncellenmiş kısıtlamaları kaydet
+      await FirebaseFirestore.instance
+          .collection('games')
+          .doc(widget.gameId)
+          .update({
+        "restrictions": restrictions
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Bölge yasağı uygulandı! Rakip ${restrictedSide == 'left' ? 'sol' : 'sağ'} tarafa harf koyamayacak."),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      print("Bölge yasağı uygulandı: $restrictedSide");
+    } catch (e) {
+      print("Bölge yasağı uygulanırken hata: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Bölge yasağı uygulanırken hata: $e")),
+      );
+      rethrow; // Hatayı üst fonksiyona da ilet
+    }
   }
 
   Future<void> _applyLetterRestriction() async {
-    // Opponent'ın mevcut harflerini al
-    final gameDoc = await FirebaseFirestore.instance
-        .collection('games')
-        .doc(widget.gameId)
-        .get();
+    try {
+      // Opponent'ın mevcut harflerini al
+      final gameDoc = await FirebaseFirestore.instance
+          .collection('games')
+          .doc(widget.gameId)
+          .get();
 
-    final opponentLetters = List<Map<String, dynamic>>.from(
-        (gameDoc.data() as Map<String, dynamic>)['letters'][opponentId] ?? []);
+      final Map<String, dynamic>? lettersData = (gameDoc.data() as Map<String, dynamic>)['letters'];
 
-    if (opponentLetters.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Rakibin elinde harf yok!")),
-      );
-      return;
-    }
-
-    // Rastgele 2 harf seç
-    opponentLetters.shuffle(Random());
-    final restrictedLetters = opponentLetters.take(min(2, opponentLetters.length)).toList();
-
-    await FirebaseFirestore.instance
-        .collection('games')
-        .doc(widget.gameId)
-        .update({
-      "restrictions.letterRestriction": {
-        "active": true,
-        "letterIds": restrictedLetters.map((l) => l['id']).toList(),
-        "appliedBy": widget.userId,
-        "appliedTo": opponentId,
-        "expiresAt": FieldValue.serverTimestamp(),
+      if (lettersData == null || !lettersData.containsKey(opponentId) ||
+          (lettersData[opponentId] as List).isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Rakibin elinde harf yok!"), backgroundColor: Colors.orange),
+        );
+        return;
       }
-    });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Harf yasağı uygulandı! Rakip bir tur boyunca 2 harfini kullanamayacak.")),
-    );
+      final opponentLetters = List<Map<String, dynamic>>.from(lettersData[opponentId]);
+
+      if (opponentLetters.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Rakibin elinde harf yok!"), backgroundColor: Colors.orange),
+        );
+        return;
+      }
+
+      // Rastgele 2 harf seç
+      opponentLetters.shuffle(Random());
+      final restrictedLetters = opponentLetters.take(min(2, opponentLetters.length)).toList();
+      final restrictedIds = restrictedLetters.map((l) => l['id']).toList();
+
+      await FirebaseFirestore.instance
+          .collection('games')
+          .doc(widget.gameId)
+          .update({
+        "restrictions.letterRestriction": {
+          "active": true,
+          "letterIds": restrictedIds,
+          "appliedBy": widget.userId,
+          "appliedTo": opponentId,
+          "expiresAt": FieldValue.serverTimestamp(),
+        }
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Harf yasağı uygulandı! Rakip bir tur boyunca ${restrictedLetters.map((l) => l['char']).join(', ')} harflerini kullanamayacak."),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      print("Harf yasağı uygulandı. Kısıtlanan harfler: ${restrictedLetters.map((l) => l['char']).join(', ')}");
+    } catch (e) {
+      print("Harf yasağı uygulanırken hata: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Harf yasağı uygulanırken hata: $e")),
+      );
+    }
   }
 
   Future<void> _applyExtraMove() async {
@@ -1270,8 +1596,13 @@ class _GameScreenState extends State<GameScreen> {
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Ekstra hamle hakkı kazandın! Bu turu tamamladıktan sonra bir hamle daha yapabileceksin.")),
+      const SnackBar(
+        content: Text("Ekstra hamle hakkı kazandın! Bu turu tamamladıktan sonra bir hamle daha yapabileceksin."),
+        backgroundColor: Colors.green,
+      ),
     );
+
+    print("Ekstra hamle jokeri uygulandı");
   }
 
   Future<void> _passMove() async {
@@ -1537,6 +1868,30 @@ class _GameScreenState extends State<GameScreen> {
             onWillAccept: (data) {
               // Eğer hücrede zaten bir harf varsa veya oyuncunun turnu değilse kabul etme
               if (!myTurn || displayChar.isNotEmpty) return false;
+              // Bölge kısıtlaması kontrolü
+              if (hasAreaRestriction) {
+                // Sol taraf kısıtlaması
+                if (restrictedSide == 'left' && col < 7) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text("Sol tarafa harf koyamazsın!"),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                  return false;
+                }
+
+                // Sağ taraf kısıtlaması
+                if (restrictedSide == 'right' && col > 7) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text("Sağ tarafa harf koyamazsın!"),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                  return false;
+                }
+              }
 
               // İlk hamle kontrolü
               bool isFirstMove = board.every((row) => row.every((cell) => cell.isEmpty));
@@ -1726,31 +2081,46 @@ class _GameScreenState extends State<GameScreen> {
               );
             }).toList(),
           ),
-          if (rewards.isNotEmpty)
+          if (rewards.isNotEmpty && myTurn)
             Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: rewards.map((reward) {
-                  return GestureDetector(
-                    onTap: () => _useReward(reward),
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      margin: const EdgeInsets.symmetric(horizontal: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.green[700],
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.white, width: 2),
-                      ),
-                      child: Icon(
-                        _getRewardIcon(reward['type']),
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                  );
-                }).toList(),
+              padding: const EdgeInsets.only(top: 12),
+              child: Column(
+                children: [
+                  const Text(
+                    "Ödüller",
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: rewards.map((reward) {
+                      return GestureDetector(
+                        onTap: () {
+                          print("Ödül kullanılıyor: ${reward['type']}");
+                          _useReward(reward);
+                        },
+                        child: Container(
+                          width: 48,
+                          height: 48,
+                          margin: const EdgeInsets.symmetric(horizontal: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.green[700],
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.white, width: 2),
+                          ),
+                          child: Tooltip(
+                            message: _getRewardDescription(reward['type']),
+                            child: Icon(
+                              _getRewardIcon(reward['type']),
+                              color: Colors.white,
+                              size: 28,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
               ),
             ),
         ],
@@ -1758,6 +2128,19 @@ class _GameScreenState extends State<GameScreen> {
     );
   }
 
+// Ödül açıklamalarını getiren yardımcı fonksiyon
+  String _getRewardDescription(String type) {
+    switch (type) {
+      case 'areaRestriction':
+        return "Bölge Yasağı: Rakip belirli bir bölgeye harf koyamaz";
+      case 'letterRestriction':
+        return "Harf Yasağı: Rakibin 2 harfi 1 tur boyunca donar";
+      case 'extraMove':
+        return "Ekstra Hamle: Bu turdan sonra bir hamle daha yapabilirsin";
+      default:
+        return "Bilinmeyen ödül";
+    }
+  }
   IconData _getRewardIcon(String type) {
     switch (type) {
       case 'areaRestriction':
