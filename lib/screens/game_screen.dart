@@ -500,9 +500,32 @@ class _GameScreenState extends State<GameScreen> {
     // Kontrol 1: En az bir harf yerleştirilmiş olmalı
     if (tempPlacedLetters.isEmpty) return false;
 
-    // Kontrol 2: İlk hamle merkez hücreye (7,7) temas etmeli
+    // Kontrol 2: İlk hamle merkez hücreden (7,7) geçmeli
     bool isFirstMove = board.every((row) => row.every((cell) => cell.isEmpty));
-    if (isFirstMove && !tempPlacedLetters.containsKey('7-7')) return false;
+    if (isFirstMove) {
+      // İlk hamlede kelime merkez hücreden (7,7) geçmeli - bu kontrolü _confirmMove'a taşıdık
+      // Sadece harflerin yatay veya dikey bir çizgide olmasını kontrol edelim
+      bool isHorizontal = true;
+      bool isVertical = true;
+      int? commonRow, commonCol;
+
+      List<String> positions = tempPlacedLetters.keys.toList();
+      if (positions.length > 1) {
+        List<int> firstParts = positions[0].split('-').map(int.parse).toList();
+        commonRow = firstParts[0];
+        commonCol = firstParts[1];
+
+        for (int i = 1; i < positions.length; i++) {
+          List<int> parts = positions[i].split('-').map(int.parse).toList();
+          if (parts[0] != commonRow) isHorizontal = false;
+          if (parts[1] != commonCol) isVertical = false;
+        }
+
+        if (!isHorizontal && !isVertical) return false;
+      }
+
+      return true;
+    }
 
     // Kontrol 3.5: Yerleştirilen harfler tek doğrultuda olmalı
     if (tempPlacedLetters.length > 1) {
@@ -877,6 +900,18 @@ class _GameScreenState extends State<GameScreen> {
         const SnackBar(content: Text("Önce bir kelime oluşturun")),
       );
       return;
+    }
+
+    // İlk hamle için özel kontrol
+    bool isFirstMove = board.every((row) => row.every((cell) => cell.isEmpty));
+    if (isFirstMove) {
+      bool passesThroughCenter = tempPlacedLetters.containsKey('7-7');
+      if (!passesThroughCenter) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("İlk hamle merkez hücreden (7,7) geçmelidir!")),
+        );
+        return;
+      }
     }
 
     // Kelime yerleştirme kurallarını kontrol et
@@ -1504,15 +1539,25 @@ class _GameScreenState extends State<GameScreen> {
               if (!myTurn || displayChar.isNotEmpty) return false;
 
               // İlk hamle kontrolü
-              bool isFirstMove = board.every((row) => row.every((cell) => cell.isEmpty)) &&
-                  tempPlacedLetters.isEmpty;
+              bool isFirstMove = board.every((row) => row.every((cell) => cell.isEmpty));
 
               if (isFirstMove) {
-                // İlk hamle sadece merkez hücreye yapılabilir
-                return row == 7 && col == 7;
-              }
+                // İlk hamle için:
+                if (tempPlacedLetters.isEmpty) {
+                  // İlk hamledeki ilk harf herhangi bir yere yerleştirilebilir
+                  return true;
+                } else {
+                  // Sonraki harfler, yerleştirilen ilk harfle aynı satır veya sütunda olmalı
+                  List<String> positions = tempPlacedLetters.keys.toList();
+                  String firstPos = positions[0]; // İlk yerleştirilen harfin konumu
+                  List<int> firstParts = firstPos.split('-').map(int.parse).toList();
 
-              // İlk harf için: Mevcut tahtadaki herhangi bir harfe bitişik olmalı
+                  // Aynı satırda veya aynı sütunda olmalı
+                  return (row == firstParts[0]) || (col == firstParts[1]);
+                }
+              }
+              // İlk hamle değilse:
+              // İlk yerleştirilen harf mevcut tahtadaki harflere bitişik olmalı
               if (tempPlacedLetters.isEmpty) {
                 List<List<int>> directions = [
                   [row - 1, col], // yukarı
@@ -1520,7 +1565,6 @@ class _GameScreenState extends State<GameScreen> {
                   [row, col - 1], // sol
                   [row, col + 1]  // sağ
                 ];
-
                 for (var dir in directions) {
                   int r = dir[0];
                   int c = dir[1];
@@ -1531,38 +1575,26 @@ class _GameScreenState extends State<GameScreen> {
                   }
                 }
                 return false;
-              }
-
-              // Sonraki harfler için: Zaten yerleştirilmiş geçici harflere bitişik olmalı
-              // Aynı zamanda aynı satır veya sütunda olmalı
-              List<String> placedPositions = tempPlacedLetters.keys.toList();
-              bool allSameRow = true;
-              bool allSameCol = true;
-              int? commonRow, commonCol;
-
-              // Yön tespiti
-              if (placedPositions.isNotEmpty) {
-                List<int> parts = placedPositions[0].split('-').map(int.parse).toList();
-                commonRow = parts[0];
-                commonCol = parts[1];
-
-                for (var pos in placedPositions) {
-                  List<int> posParts = pos.split('-').map(int.parse).toList();
-                  if (posParts[0] != commonRow) allSameRow = false;
-                  if (posParts[1] != commonCol) allSameCol = false;
+              } else {
+                // Sonraki harfler, ilk yerleştirilen harfle aynı satır veya sütunda olmalı
+                List<String> positions = tempPlacedLetters.keys.toList();
+                bool allSameRow = true;
+                bool allSameCol = true;
+                int firstRow = int.parse(positions[0].split('-')[0]);
+                int firstCol = int.parse(positions[0].split('-')[1]);
+                for (var pos in positions) {
+                  List<int> parts = pos.split('-').map(int.parse).toList();
+                  if (parts[0] != firstRow) allSameRow = false;
+                  if (parts[1] != firstCol) allSameCol = false;
                 }
+                if (allSameRow) {
+                  return row == firstRow;
+                } else if (allSameCol) {
+                  return col == firstCol;
+                }
+                // İlk yerleştirilen harflerle aynı satırda mı yoksa aynı sütunda mı olmalı?
+                return (row == firstRow) || (col == firstCol);
               }
-
-              // Yeni harf yerleştirme, mevcut yöne uygun olmalı
-              if (allSameRow && row == commonRow) {
-                // Yatay yerleştirme
-                return true;
-              } else if (allSameCol && col == commonCol) {
-                // Dikey yerleştirme
-                return true;
-              }
-
-              return false;
             },
             onAccept: (data) {
               if (!myTurn) return;
