@@ -5817,6 +5817,7 @@ ayrıksı
 ayrıksı ay
 ayrıksılık
 ayrıksı yıl
+liğde
 ayrıksız
 ayrılabilme
 ayrılabilmek
@@ -23220,7 +23221,7 @@ erbiyum
 erce
 ercecik
 ercik
-Erciş 
+erciş
 Erdek
 erdem
 erdemli

@@ -1,6 +1,7 @@
 // screens/game_screen.dart
 import 'dart:math';
 
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -31,6 +32,8 @@ import '../widgets/game_actions.dart';
 // Dialogs
 import 'dialogs/game_end_dialog.dart';
 import 'dialogs/surrender_dialog.dart';
+import 'dialogs/restriction_dialog.dart';
+
 
 class GameScreen extends StatefulWidget {
   final String gameId;
@@ -78,12 +81,27 @@ class _GameScreenState extends State<GameScreen> {
   Map<String, bool> mineVisibility = {}; // Hangi mayınların görünür olduğu
   Map<String, bool> rewardVisibility = {}; // Hangi ödüllerin görünür olduğu
 
+  bool _isAreaRestrictionNotified = false;
+  bool _isLetterRestrictionNotified = false;
+
+  // Add the transformation controller for zooming
+  late TransformationController _boardTransformController;
+
+
   @override
   void initState() {
     super.initState();
+    _boardTransformController = TransformationController();
     _initializeServices();
     _loadWordList();
     _loadGameData();
+  }
+
+  @override
+  void dispose() {
+    // Dispose the controller when the widget is destroyed
+    _boardTransformController.dispose();
+    super.dispose();
   }
 
   void _initializeServices() {
@@ -190,10 +208,22 @@ class _GameScreenState extends State<GameScreen> {
         hasAreaRestriction = true;
         restrictedSide = restrictions.areaRestriction!.side;
       });
+      if (!_isAreaRestrictionNotified) {
+        _isAreaRestrictionNotified = true;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Dikkat! ${restrictedSide == 'left' ? 'Sol' : 'Sağ'} tarafa harf koyamazsın!"),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
     } else {
       setState(() {
         hasAreaRestriction = false;
         restrictedSide = '';
+        _isAreaRestrictionNotified = false;
       });
     }
 
@@ -204,9 +234,30 @@ class _GameScreenState extends State<GameScreen> {
       setState(() {
         restrictedLetterIds = restrictions.letterRestriction!.letterIds;
       });
+      // Debug bilgisi
+      print("Bu oyuncu için harf kısıtlaması aktif. Kısıtlanan harf ID'leri: $restrictedLetterIds");
+      // Eğer bu bir yeni kısıtlama ise, kullanıcıya bilgi ver
+      if (!_isLetterRestrictionNotified) {
+        _isLetterRestrictionNotified = true;
+
+        // Kısıtlanan harfleri bul
+        List<String> restrictedChars = myLetters
+            .where((letter) => restrictedLetterIds.contains(letter.id))
+            .map((letter) => letter.char)
+            .toList();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Dikkat! ${restrictedChars.join(', ')} harflerin bu tur için kısıtlandı!"),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
     } else {
       setState(() {
         restrictedLetterIds = [];
+        _isLetterRestrictionNotified = false;
       });
     }
   }
@@ -214,6 +265,8 @@ class _GameScreenState extends State<GameScreen> {
   void _setupGameListener() {
     _firebaseService.gameStateStream(widget.gameId).listen((updatedGameState) {
       if (mounted) {
+        final previousRestrictions = gameState?.restrictions;
+
         setState(() {
           // Update game state
           gameState = updatedGameState;
@@ -222,10 +275,6 @@ class _GameScreenState extends State<GameScreen> {
           if (gameState!.status == GameStatus.completed && !_isDialogShowing) {
             _showGameEndDialog();
           }
-
-          // Check for restrictions
-          _checkRestrictions();
-
           // Update letters if they've changed
           if (gameState!.letters.containsKey(widget.userId)) {
             myLetters = gameState!.letters[widget.userId] ?? [];
@@ -250,16 +299,73 @@ class _GameScreenState extends State<GameScreen> {
 
           _updateMineAndRewardVisibility();
 
-
-          // ÖNEMLİ DEĞİŞİKLİK: Harf havuzunu burada güncelleme!
-          // Sadece nextLetterId'yi güncelle
           _letterService.setNextLetterId(gameState!.nextLetterId);
+          // Check for restrictions
+
 
           // Debug için kalan harf sayısını yazdır
           print("Firebase'den gelen harf sayısı: ${gameState!.letterPool.length}");
         });
+        _checkRestrictions();
+
+        _checkForNewRestrictions(previousRestrictions);
       }
     });
+  }
+  void _checkForNewRestrictions(Restrictions? previousRestrictions) {
+    if (previousRestrictions == null || gameState == null) return;
+
+    // Bölge kısıtlaması kontrolü
+    final currentAreaRestriction = gameState!.restrictions.areaRestriction;
+    final previousAreaRestriction = previousRestrictions.areaRestriction;
+
+    if (currentAreaRestriction != null &&
+        currentAreaRestriction.active &&
+        currentAreaRestriction.appliedTo == widget.userId) {
+
+      // Yeni gelmiş bir kısıtlama mı?
+      bool isNewRestriction = previousAreaRestriction == null ||
+          !previousAreaRestriction.active ||
+          previousAreaRestriction.appliedTo != widget.userId;
+
+      if (isNewRestriction) {
+        // Diyalog göster
+        RestrictionDialog.show(
+          context: context,
+          restrictionType: 'area',
+          side: currentAreaRestriction.side,
+        );
+      }
+    }
+
+    // Harf kısıtlaması kontrolü
+    final currentLetterRestriction = gameState!.restrictions.letterRestriction;
+    final previousLetterRestriction = previousRestrictions.letterRestriction;
+
+    if (currentLetterRestriction != null &&
+        currentLetterRestriction.active &&
+        currentLetterRestriction.appliedTo == widget.userId) {
+
+      // Yeni gelmiş bir kısıtlama mı?
+      bool isNewRestriction = previousLetterRestriction == null ||
+          !previousLetterRestriction.active ||
+          previousLetterRestriction.appliedTo != widget.userId;
+
+      if (isNewRestriction) {
+        // Kısıtlanan harfleri bul
+        List<String> restrictedChars = myLetters
+            .where((letter) => currentLetterRestriction.letterIds.contains(letter.id))
+            .map((letter) => letter.char)
+            .toList();
+
+        // Diyalog göster
+        RestrictionDialog.show(
+          context: context,
+          restrictionType: 'letter',
+          restrictedLetters: restrictedChars,
+        );
+      }
+    }
   }
 
 
@@ -863,6 +969,10 @@ class _GameScreenState extends State<GameScreen> {
         String message;
         switch (reward.type) {
           case RewardType.areaRestriction:
+
+            final updatedGameState = await _firebaseService.loadGameState(widget.gameId);
+            final restrictedSide = updatedGameState.restrictions.areaRestriction?.side ?? 'right';
+
             message = "Bölge yasağı uygulandı! Rakip bir tarafa harf koyamayacak.";
             break;
           case RewardType.letterRestriction:
@@ -904,6 +1014,7 @@ class _GameScreenState extends State<GameScreen> {
     if (!myTurn &&
         gameState!.extraMove.active &&
         gameState!.extraMove.userId == widget.userId) {
+      print("Extra move is active for the current user");
       myTurn = true;
     }
 
@@ -913,56 +1024,80 @@ class _GameScreenState extends State<GameScreen> {
   bool _isLetterRestricted(int letterId) {
     return restrictedLetterIds.contains(letterId);
   }
-
   Widget _buildBoard() {
     return Expanded(
-      child: GridView.builder(
-        padding: const EdgeInsets.all(6),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: BOARD_SIZE,
-        ),
-        itemCount: BOARD_SIZE * BOARD_SIZE,
-        itemBuilder: (context, index) {
-          final row = index ~/ BOARD_SIZE;
-          final col = index % BOARD_SIZE;
-          final placedChar = board[row][col];
-          final tempChar = tempPlacedLetters['$row-$col']?['char'] ?? '';
-          final displayChar = tempChar.isNotEmpty ? tempChar : placedChar;
-          final point = tempPlacedLetters['$row-$col']?['point'];
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final double boardWidth = constraints.maxWidth;
+          final double boardHeight = constraints.maxHeight;
 
-          final position = '$row-$col';
-          final hasMine = mineVisibility[position] ?? false;
-          final hasReward = rewardVisibility[position] ?? false;
+          return Container(
+            width: boardWidth,
+            height: boardHeight,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black12,
+                  blurRadius: 6,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: GridView.builder(
+              shrinkWrap: true,
+              physics: const ScrollPhysics(), // Normal kaydırma davranışı
+              padding: const EdgeInsets.all(6),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: BOARD_SIZE,
+                childAspectRatio: 1.0,
+              ),
+              itemCount: BOARD_SIZE * BOARD_SIZE,
+              itemBuilder: (context, index) {
+                final row = index ~/ BOARD_SIZE;
+                final col = index % BOARD_SIZE;
+                final placedChar = board[row][col];
+                final tempChar = tempPlacedLetters['$row-$col']?['char'] ?? '';
+                final displayChar = tempChar.isNotEmpty ? tempChar : placedChar;
+                final point = tempPlacedLetters['$row-$col']?['point'];
 
-          return BoardCell(
-            row: row,
-            col: col,
-            displayChar: displayChar,
-            point: displayChar.isNotEmpty ? point : null,
-            isTemporary: tempChar.isNotEmpty,
-            isWordValid: isWordValid,
-            myTurn: _isMyTurn(),
-            hasAreaRestriction: hasAreaRestriction,
-            restrictedSide: restrictedSide,
-            hasMine: hasMine,  // Mayın durumunu ekle
-            hasReward: hasReward,
-            onAccept: (data) {
-              setState(() {
-                tempPlacedLetters['$row-$col'] = data;
-                myLetters.removeWhere((l) => l.id == data['id']);
-                _updateCurrentWord();
-              });
-            },
-            onTap: () {
-              if (_isMyTurn() && tempPlacedLetters.containsKey('$row-$col')) {
-                setState(() {
-                  final letter = tempPlacedLetters['$row-$col']!;
-                  myLetters.add(Letter.fromMap(letter));
-                  tempPlacedLetters.remove('$row-$col');
-                  _updateCurrentWord();
-                });
-              }
-            },
+                final position = '$row-$col';
+                final hasMine = mineVisibility[position] ?? false;
+                final hasReward = rewardVisibility[position] ?? false;
+
+                return BoardCell(
+                  row: row,
+                  col: col,
+                  displayChar: displayChar,
+                  point: displayChar.isNotEmpty ? point : null,
+                  isTemporary: tempChar.isNotEmpty,
+                  isWordValid: isWordValid,
+                  myTurn: _isMyTurn(),
+                  hasAreaRestriction: hasAreaRestriction,
+                  restrictedSide: restrictedSide,
+                  hasMine: hasMine,
+                  hasReward: hasReward,
+                  onAccept: (data) {
+                    setState(() {
+                      tempPlacedLetters['$row-$col'] = data;
+                      myLetters.removeWhere((l) => l.id == data['id']);
+                      _updateCurrentWord();
+                    });
+                  },
+                  onTap: () {
+                    if (_isMyTurn() && tempPlacedLetters.containsKey('$row-$col')) {
+                      setState(() {
+                        final letter = tempPlacedLetters['$row-$col']!;
+                        myLetters.add(Letter.fromMap(letter));
+                        tempPlacedLetters.remove('$row-$col');
+                        _updateCurrentWord();
+                      });
+                    }
+                  },
+                );
+              },
+            ),
           );
         },
       ),
@@ -971,22 +1106,45 @@ class _GameScreenState extends State<GameScreen> {
 
   Widget _buildLetters() {
     return Container(
-      padding: const EdgeInsets.all(12),
-      color: Colors.indigo[800],
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      decoration: BoxDecoration(
+        color: Colors.indigo[800],
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(16),
+          topRight: Radius.circular(16),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.3),
+            blurRadius: 10,
+            offset: const Offset(0, -3),
+          ),
+        ],
+      ),
       child: Column(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: myLetters.map((letter) {
-              return LetterTile(
-                letter: letter,
-                isActive: _isMyTurn(),
-                isRestricted: _isLetterRestricted(letter.id),
-              );
-            }).toList(),
+          // Letters row with animation
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            child: Row(
+              key: ValueKey<int>(myLetters.length), // Forces animation when letters change
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: myLetters.map((letter) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 0.5),
+                  child: LetterTile(
+                    letter: letter,
+                    isActive: _isMyTurn(),
+                    isRestricted: _isLetterRestricted(letter.id),
+                  ),
+                );
+              }).toList(),
+            ),
           ),
 
-          // Rewards bar
+          const SizedBox(height: 10),
+
+          // Rewards bar with animation
           if (gameState != null)
             RewardsBar(
               rewards: gameState!.rewards.values
@@ -999,7 +1157,6 @@ class _GameScreenState extends State<GameScreen> {
       ),
     );
   }
-
   @override
   Widget build(BuildContext context) {
     if (isLoading || gameState == null) {
@@ -1041,7 +1198,7 @@ class _GameScreenState extends State<GameScreen> {
           // Game board
           _buildBoard(),
 
-          const SizedBox(height: 8),
+          const SizedBox(height: 50),
 
           // Letters area
           _buildLetters(),

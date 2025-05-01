@@ -9,18 +9,25 @@ class LetterService {
   List<Letter> _letterPool = [];
   int _nextLetterId = 0;
 
+  // Harf havuzu doğruluğunu takip etmek için eklenen debug değişkenleri
+  final Map<String, int> _letterCounts = {};
+  int _totalLettersCreated = 0;
+
   LetterService(this._firebaseService);
 
-  /// Harf havuzunu başlatır
+  /// Harf havuzunu başlatır - LETTER_POOL içinde tanımlanan TÜM harfleri kullanarak
   void initializeLetterPool() {
     _letterPool = [];
+    _letterCounts.clear();
+    _totalLettersCreated = 0;
 
-    // LETTER_POOL sabitinden harfleri oluştur
+    // LETTER_POOL sabitinden harfleri doğru sayıda oluştur
     for (var letterInfo in LETTER_POOL) {
       final char = letterInfo['char'] as String;
       final count = letterInfo['count'] as int;
       final point = letterInfo['point'] as int;
 
+      // Her harf için belirtilen sayıda ekleme yap
       for (int i = 0; i < count; i++) {
         _letterPool.add(Letter(
           char: char,
@@ -28,16 +35,32 @@ class LetterService {
           id: 0, // Havuzdaki harflerin ID'si yok
           isJoker: char == 'JOKER',
         ));
+
+        // Debug sayacını artır
+        _letterCounts[char] = (_letterCounts[char] ?? 0) + 1;
+        _totalLettersCreated++;
       }
     }
 
     // Havuzu karıştır
     _letterPool.shuffle(Random());
 
-    print("Harf havuzu başlatıldı. Toplam harf sayısı: ${_letterPool.length}");
+    // Debug için harf sayılarını kontrol et
+    print("Harf havuzu başlatıldı.");
+    print("Toplam harf sayısı: ${_letterPool.length} ($_totalLettersCreated)");
+
+    // Her harfin sayısını kontrol et - toplam 100 olmalı
+    _letterCounts.forEach((char, count) {
+      print("$char harfinden $count adet");
+    });
+
+    // Harf sayısını doğrula
+    if (_totalLettersCreated != 100) {
+      print("UYARI: Harf havuzu 100 harften oluşmalı, ancak $_totalLettersCreated harf oluşturuldu!");
+    }
   }
 
-  /// Oyun başlangıcında tüm oyunculara harf dağıtır (Orijinal kodla uyumlu)
+  /// Oyun başlangıcında tüm oyunculara harf dağıtır
   Future<void> initializeGameLetters(String gameId) async {
     // Önce harf havuzunu başlat
     initializeLetterPool();
@@ -58,48 +81,55 @@ class LetterService {
     final lettersForPlayer1 = <Letter>[];
     final lettersForPlayer2 = <Letter>[];
 
+    // ÖNEMLİ: Harfleri havuzdan çıkararak dağıtalım
+
     // İlk 7 harf 1. oyuncuya
-    for (int i = 0; i < 7 && i < _letterPool.length; i++) {
+    for (int i = 0; i < 7 && _letterPool.isNotEmpty; i++) {
+      final letter = _letterPool.removeAt(0); // Havuzdan ilk harfi çıkar
       lettersForPlayer1.add(Letter(
-        char: _letterPool[i].char,
-        point: _letterPool[i].point,
+        char: letter.char,
+        point: letter.point,
         id: _nextLetterId++,
-        isJoker: _letterPool[i].isJoker,
+        isJoker: letter.isJoker,
       ));
     }
 
     // Sonraki 7 harf 2. oyuncuya
-    for (int i = 7; i < 14 && i < _letterPool.length; i++) {
+    for (int i = 0; i < 7 && _letterPool.isNotEmpty; i++) {
+      final letter = _letterPool.removeAt(0); // Havuzdan ilk harfi çıkar
       lettersForPlayer2.add(Letter(
-        char: _letterPool[i].char,
-        point: _letterPool[i].point,
+        char: letter.char,
+        point: letter.point,
         id: _nextLetterId++,
-        isJoker: _letterPool[i].isJoker,
+        isJoker: letter.isJoker,
       ));
     }
 
-    // Kalan harfler havuzda kalacak
-    if (_letterPool.length >= 14) {
-      _letterPool = _letterPool.sublist(14);
-    } else {
-      _letterPool = [];
-    }
-
-    print("Harf dağıtımı sonrası kalan harf sayısı: ${_letterPool.length}");
+    // Debug kontrolleri
+    _logLetterDistribution("Player 1", lettersForPlayer1);
+    _logLetterDistribution("Player 2", lettersForPlayer2);
+    _logRemainingLetters();
 
     // Firebase'e kaydet
     await _firebaseService.updateUserLetters(gameId, player1, lettersForPlayer1);
     await _firebaseService.updateUserLetters(gameId, player2, lettersForPlayer2);
+
+    // ÖNEMLİ: Güncel harf havuzunu Firebase'e kaydet
     await _firebaseService.updateLetterPool(gameId, _letterPool);
+
+    print("Harf dağıtımı tamamlandı ve Firebase'e kaydedildi.");
+    print("Havuzda kalan harf sayısı: ${_letterPool.length}");
   }
 
   /// Tek bir oyuncu için ilk harfleri dağıtır
   Future<List<Letter>> distributeInitialLetters(String gameId, String userId) async {
+    // ÖNEMLİ: Havuz boşsa veya çok azsa güncel havuzu Firebase'den al
     if (_letterPool.isEmpty) {
       // Havuzdan bilgi almamız gerekiyor
       final gameState = await _firebaseService.loadGameState(gameId);
       _letterPool = gameState.letterPool;
       print("Havuz boş, Firebase'den alındı. Mevcut harf sayısı: ${_letterPool.length}");
+      _logRemainingLetters();
     }
 
     // İlk 7 harfi al (havuzda daha az varsa mevcut sayıyı)
@@ -109,7 +139,7 @@ class LetterService {
     for (int i = 0; i < count; i++) {
       if (_letterPool.isEmpty) break;
 
-      final letter = _letterPool.removeAt(0);
+      final letter = _letterPool.removeAt(0);  // Havuzdan harfi çıkar
       userLetters.add(Letter(
         char: letter.char,
         point: letter.point,
@@ -118,9 +148,11 @@ class LetterService {
       ));
     }
 
-    print("Harfler dağıtıldı. Kalan harf sayısı: ${_letterPool.length}");
+    // Debug kontrolleri
+    _logLetterDistribution("New User", userLetters);
+    _logRemainingLetters();
 
-    // Firebase'e kaydet
+    // ÖNEMLİ: Firebase'e güncel havuzu kaydet
     await _firebaseService.updateUserLetters(gameId, userId, userLetters);
     await _firebaseService.updateLetterPool(gameId, _letterPool);
 
@@ -133,7 +165,8 @@ class LetterService {
     if (_letterPool.isEmpty || _letterPool.length < count) {
       final gameState = await _firebaseService.loadGameState(gameId);
       _letterPool = gameState.letterPool;
-      print("Havuz yetersiz, Firebase'den alındı. Yeni harf sayısı: ${_letterPool.length}");
+      print("Havuz yetersiz, Firebase'den alındı. Mevcut harf sayısı: ${_letterPool.length}");
+      _logRemainingLetters();
     }
 
     if (_letterPool.isEmpty) return currentLetters;
@@ -156,9 +189,11 @@ class LetterService {
 
     final updatedLetters = [...currentLetters, ...newLetters];
 
-    print("Yeni harf çekimi sonrası kalan harf sayısı: ${_letterPool.length}");
+    // Debug kontrolleri
+    _logLetterDistribution("New Letters", newLetters);
+    _logRemainingLetters();
 
-    // Firebase'e kaydet
+    // ÖNEMLİ: Firebase'e güncel havuzu kaydet
     await _firebaseService.updateUserLetters(gameId, userId, updatedLetters);
     await _firebaseService.updateLetterPool(gameId, _letterPool);
 
@@ -185,6 +220,7 @@ class LetterService {
     _letterPool.shuffle(Random());
 
     print("Harfler sıfırlandı, havuza geri eklendi. Havuz boyutu: ${_letterPool.length}");
+    _logRemainingLetters();
 
     // Yeni 7 harf al
     return await distributeInitialLetters(gameId, userId);
@@ -220,6 +256,7 @@ class LetterService {
   void setLetterPool(List<Letter> letterPool) {
     _letterPool = letterPool;
     print("Harf havuzu güncellendi. Yeni boyut: ${_letterPool.length}");
+    _logRemainingLetters();
   }
 
   /// Harf havuzunu döndürür
@@ -234,5 +271,39 @@ class LetterService {
     } catch (e) {
       return null;
     }
+  }
+
+  // Debug metotları
+
+  /// Dağıtılan harfleri loglar
+  void _logLetterDistribution(String playerName, List<Letter> letters) {
+    if (letters.isEmpty) {
+      print("$playerName: Harf yok");
+      return;
+    }
+
+    final Map<String, int> counts = {};
+    for (var letter in letters) {
+      counts[letter.char] = (counts[letter.char] ?? 0) + 1;
+    }
+
+    final countsText = counts.entries.map((e) => "${e.key}:${e.value}").join(", ");
+    print("$playerName harfleri: $countsText");
+  }
+
+  /// Havuzda kalan harfleri loglar
+  void _logRemainingLetters() {
+    if (_letterPool.isEmpty) {
+      print("Havuz boş");
+      return;
+    }
+
+    final Map<String, int> counts = {};
+    for (var letter in _letterPool) {
+      counts[letter.char] = (counts[letter.char] ?? 0) + 1;
+    }
+
+    final countsText = counts.entries.map((e) => "${e.key}:${e.value}").join(", ");
+    print("Havuzda kalan harfler: $countsText");
   }
 }

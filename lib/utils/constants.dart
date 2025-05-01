@@ -8,7 +8,7 @@ const int BOARD_SIZE = 15;
 const int MAX_LETTERS_PER_PLAYER = 7;
 
 /// Peş peşe pas sayısı limiti
-const int MAX_CONSECUTIVE_PASSES = 2;
+const int MAX_CONSECUTIVE_PASSES = 4;
 
 /// Türkçe harfler ve puanları
 final List<Map<String, dynamic>> LETTER_POOL = [

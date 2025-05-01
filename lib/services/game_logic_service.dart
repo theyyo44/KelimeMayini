@@ -58,14 +58,16 @@ class GameLogicService {
     }
 
     // Kelime bilgisini al
-    Map<String, dynamic> wordInfo = GameValidator.getWordInfo(board, tempPlacedLetters);
+    Map<String, dynamic> wordInfo = GameValidator.getWordInfo(
+        board, tempPlacedLetters);
 
     return {
       'isValid': wordInfo['isValid'],
       'word': wordInfo['word'],
       'score': wordInfo['score'],
       'isFirstMove': isFirstMove,
-      'allWords': wordInfo['allWords'] ?? [], // Tüm kelimelerin listesini de döndür
+      'allWords': wordInfo['allWords'] ?? [],
+      // Tüm kelimelerin listesini de döndür
     };
   }
 
@@ -81,7 +83,8 @@ class GameLogicService {
     required Map<String, Mine> mines,
   }) async {
     // Kelime bilgisini al
-    Map<String, dynamic> wordInfo = GameValidator.getWordInfo(board, tempPlacedLetters);
+    Map<String, dynamic> wordInfo = GameValidator.getWordInfo(
+        board, tempPlacedLetters);
 
     if (!wordInfo['isValid']) {
       return {
@@ -119,7 +122,8 @@ class GameLogicService {
               break;
             case MineType.pointTransfer:
               transferPoints = true;
-              print("Puan Transferi uygulandı: $originalScore puan rakibe gidecek");
+              print(
+                  "Puan Transferi uygulandı: $originalScore puan rakibe gidecek");
               break;
             case MineType.letterLoss:
               letterLoss = true;
@@ -140,7 +144,10 @@ class GameLogicService {
 
           triggeredMines.add({
             'position': position,
-            'type': mine.type.toString().split('.').last
+            'type': mine.type
+                .toString()
+                .split('.')
+                .last
           });
 
           // Mayını tetiklenmiş olarak işaretle
@@ -175,7 +182,10 @@ class GameLogicService {
 
           collectedRewards.add({
             'position': position,
-            'type': reward.type.toString().split('.').last
+            'type': reward.type
+                .toString()
+                .split('.')
+                .last
           });
 
           print("Ödül toplandı: ${reward.type}");
@@ -206,12 +216,15 @@ class GameLogicService {
     );
 
     // Kullanılan harfleri çıkar ve yeni harfler çek
-    List<int> usedLetterIds = tempPlacedLetters.values.map((l) => l['id'] as int).toList();
-    List<Letter> updatedLetters = myLetters.where((l) => !usedLetterIds.contains(l.id)).toList();
+    List<int> usedLetterIds = tempPlacedLetters.values.map((
+        l) => l['id'] as int).toList();
+    List<Letter> updatedLetters = myLetters.where((l) =>
+    !usedLetterIds.contains(l.id)).toList();
 
     // Harf kaybı mayını tetiklendiyse
     if (letterLoss) {
-      updatedLetters = await _letterService.resetLetters(gameId, userId, updatedLetters);
+      updatedLetters =
+      await _letterService.resetLetters(gameId, userId, updatedLetters);
       print("Harf kaybı mayını tetiklendi, harfler sıfırlandı");
     } else {
       // Eğer gerekliyse, yeni harfler çek
@@ -222,12 +235,13 @@ class GameLogicService {
             updatedLetters,
             MAX_LETTERS_PER_PLAYER - updatedLetters.length
         );
-        print("${MAX_LETTERS_PER_PLAYER - updatedLetters.length} yeni harf çekildi");
+        print("${MAX_LETTERS_PER_PLAYER -
+            updatedLetters.length} yeni harf çekildi");
       }
     }
 
     final updatedGameState = await _firebaseService.loadGameState(gameId);
-    final remainingLetterCount = gameState.letterPool.length;
+    final remainingLetterCount = updatedGameState.letterPool.length;
 
     // Oyun sonu kontrolü
     if (updatedLetters.isEmpty && remainingLetterCount == 0) {
@@ -251,7 +265,8 @@ class GameLogicService {
   }
 
   /// Pas geçer
-  Future<bool> passTurn(String gameId, String userId, String opponentId, int consecutivePassCount) async {
+  Future<bool> passTurn(String gameId, String userId, String opponentId,
+      int consecutivePassCount) async {
     // Eğer arka arkaya 2 kez pas geçildiyse oyunu bitir
     if (consecutivePassCount + 1 >= MAX_CONSECUTIVE_PASSES) {
       await _endGame(gameId, userId, opponentId, 'consecutivePasses');
@@ -264,7 +279,8 @@ class GameLogicService {
   }
 
   /// Oyunu bitirir
-  Future<void> _endGame(String gameId, String userId, String opponentId, String reason) async {
+  Future<void> _endGame(String gameId, String userId, String opponentId,
+      String reason) async {
     // Oyun durumunu yükle
     final gameState = await _firebaseService.loadGameState(gameId);
 
@@ -311,7 +327,8 @@ class GameLogicService {
   }
 
   /// Teslim olur
-  Future<void> surrender(String gameId, String userId, String opponentId) async {
+  Future<void> surrender(String gameId, String userId,
+      String opponentId) async {
     await _firebaseService.surrender(gameId, userId, opponentId);
   }
 
@@ -322,7 +339,10 @@ class GameLogicService {
         case RewardType.areaRestriction:
         // Rastgele sağ veya sol tarafı seç
           final restrictedSide = Random().nextBool() ? 'left' : 'right';
-          await _firebaseService.applyAreaRestriction(gameId, userId, opponentId, restrictedSide);
+          await _firebaseService.applyAreaRestriction(
+              gameId, userId, opponentId, restrictedSide);
+
+
           break;
 
         case RewardType.letterRestriction:
@@ -339,10 +359,12 @@ class GameLogicService {
           final restrictedLetters = opponentLetters.take(min(2, opponentLetters.length)).toList();
           final restrictedIds = restrictedLetters.map((l) => l.id).toList();
 
-          await _firebaseService.applyLetterRestriction(gameId, userId, opponentId, restrictedIds);
+          await _firebaseService.applyLetterRestriction(
+                gameId, userId, opponentId, restrictedIds);
           break;
 
         case RewardType.extraMove:
+        // Ekstra hamle özelliğini değiştiriyoruz: hamle tamamlandıktan sonra aktifleşecek
           await _firebaseService.applyExtraMove(gameId, userId);
           break;
       }
@@ -361,7 +383,8 @@ class GameLogicService {
   Future<void> placeMines(String gameId) async {
     Random random = Random();
     Map<String, Map<String, dynamic>> mines = {};
-    Set<String> positions = {}; // Benzersiz konumları tutmak için Set kullanıyoruz
+    Set<String> positions = {
+    }; // Benzersiz konumları tutmak için Set kullanıyoruz
 
     // Mayınların yerleştirileceği rastgele konumları belirle
     for (var mineType in MINE_TYPES) {
@@ -397,7 +420,8 @@ class GameLogicService {
         bool hasMines = gameState.mines.isNotEmpty;
 
         if (!hasMines) {
-          print("Mayınlar Firebase'e kaydediliyor - toplam ${mines.length} mayın");
+          print("Mayınlar Firebase'e kaydediliyor - toplam ${mines
+              .length} mayın");
 
           // Her bir mayını ayrı ayrı ekle
           for (var entry in mines.entries) {
@@ -462,7 +486,8 @@ class GameLogicService {
         bool hasRewards = gameState.rewards.isNotEmpty;
 
         if (!hasRewards) {
-          print("Ödüller Firebase'e kaydediliyor - toplam ${rewards.length} ödül");
+          print("Ödüller Firebase'e kaydediliyor - toplam ${rewards
+              .length} ödül");
 
           // Her bir ödülü ayrı ayrı ekle
           for (var entry in rewards.entries) {

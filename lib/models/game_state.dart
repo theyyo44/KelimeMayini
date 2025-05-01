@@ -59,6 +59,7 @@ class AreaRestriction {
   final String appliedBy;
   final String appliedTo;
   final DateTime? expiresAt;
+  final int turnsRemaining;
 
   AreaRestriction({
     required this.active,
@@ -66,6 +67,7 @@ class AreaRestriction {
     required this.appliedBy,
     required this.appliedTo,
     this.expiresAt,
+    this.turnsRemaining = 1,
   });
 
   // Map'ten AreaRestriction oluşturmak için factory constructor
@@ -84,6 +86,7 @@ class AreaRestriction {
       appliedBy: map['appliedBy'] ?? '',
       appliedTo: map['appliedTo'] ?? '',
       expiresAt: expiresAt,
+      turnsRemaining: map['turnsRemaining'] ?? 1,
     );
   }
 
@@ -95,12 +98,14 @@ class AreaRestriction {
       'appliedBy': appliedBy,
       'appliedTo': appliedTo,
       'expiresAt': expiresAt?.toIso8601String(),
+      'turnsRemaining': turnsRemaining,
     };
   }
 }
 
 class LetterRestriction {
   final bool active;
+  final bool pendingActivation;
   final List<int> letterIds;
   final String appliedBy;
   final String appliedTo;
@@ -108,6 +113,7 @@ class LetterRestriction {
 
   LetterRestriction({
     required this.active,
+    this.pendingActivation = false,
     required this.letterIds,
     required this.appliedBy,
     required this.appliedTo,
@@ -126,6 +132,7 @@ class LetterRestriction {
 
     return LetterRestriction(
       active: map['active'] ?? false,
+      pendingActivation: map['pendingActivation'] ?? false,
       letterIds: List<int>.from(map['letterIds'] ?? []),
       appliedBy: map['appliedBy'] ?? '',
       appliedTo: map['appliedTo'] ?? '',
@@ -137,6 +144,7 @@ class LetterRestriction {
   Map<String, dynamic> toMap() {
     return {
       'active': active,
+      'pendingActivation': pendingActivation,
       'letterIds': letterIds,
       'appliedBy': appliedBy,
       'appliedTo': appliedTo,
@@ -275,6 +283,7 @@ class GameState {
   final int consecutivePassCount;
   final Restrictions restrictions;
   final ExtraMove extraMove;
+  final bool pendingExtraMove;
   final LastAction lastAction;
   final String? winner;
   final EndReason? endReason;
@@ -296,6 +305,7 @@ class GameState {
     this.consecutivePassCount = 0,
     required this.restrictions,
     required this.extraMove,
+    this.pendingExtraMove = false,
     required this.lastAction,
     this.winner,
     this.endReason,
@@ -420,6 +430,8 @@ class GameState {
       finalScores = Map<String, int>.from(map['finalScores']);
     }
 
+    bool pendingExtraMove = map['pendingExtraMove'] ?? false;
+
     return GameState(
       gameId: gameId,
       status: status,
@@ -434,6 +446,7 @@ class GameState {
       consecutivePassCount: map['consecutivePassCount'] ?? 0,
       restrictions: Restrictions.fromMap(map['restrictions']),
       extraMove: ExtraMove.fromMap(map['extraMove']),
+      pendingExtraMove: pendingExtraMove,
       lastAction: lastAction,
       winner: map['winner'],
       endReason: endReason,
@@ -483,6 +496,7 @@ class GameState {
       'consecutivePassCount': consecutivePassCount,
       'restrictions': restrictions.toMap(),
       'extraMove': extraMove.toMap(),
+      'pendingExtraMove': pendingExtraMove,
       'lastAction': lastAction.toMap(),
     };
 
@@ -541,6 +555,7 @@ class GameState {
     int? consecutivePassCount,
     Restrictions? restrictions,
     ExtraMove? extraMove,
+    bool? pendingExtraMove,
     LastAction? lastAction,
     String? winner,
     EndReason? endReason,
@@ -562,6 +577,7 @@ class GameState {
       consecutivePassCount: consecutivePassCount ?? this.consecutivePassCount,
       restrictions: restrictions ?? this.restrictions,
       extraMove: extraMove ?? this.extraMove,
+      pendingExtraMove: pendingExtraMove ?? this.pendingExtraMove,
       lastAction: lastAction ?? this.lastAction,
       winner: winner ?? this.winner,
       endReason: endReason ?? this.endReason,

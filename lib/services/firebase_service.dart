@@ -105,7 +105,6 @@ class FirebaseService {
       // Firebase güncellemelerini hazırla
       Map<String, dynamic> updates = {
         "board": currentBoard,
-        "currentTurn": opponentId, // Sırayı rakibe geçir
         "lastAction": {
           "userId": userId,
           "action": "move",
@@ -122,12 +121,98 @@ class FirebaseService {
         updates["scores.$userId"] = FieldValue.increment(score);
       }
 
+      // Ekstra hamle kontrolü
+      Map<String, dynamic>? gameData = gameDoc.data() as Map<String, dynamic>?;
+      bool hasExtraMove = false;
+
+      if (gameData != null &&
+          gameData.containsKey('extraMove') &&
+          gameData['extraMove'] != null &&
+          gameData['extraMove']['active'] == true &&
+          gameData['extraMove']['userId'] == userId) {
+
+        // Oyuncunun ekstra hamle hakkı var
+        // Ekstra hamle hakkı kullanıldı, sıfırla
+        updates["extraMove"] = {
+          "active": false,
+          "userId": userId
+        };
+
+        // Sırayı rakibe geçir
+        updates["currentTurn"] = opponentId;
+
+        print("Ekstra hamle kullanıldı ve sıfırlandı.");
+      } else {
+        // Normal hamle
+        // Oyuncunun ekstra hamle hakkı var mı kontrol et
+        if (gameData != null &&
+            gameData.containsKey('pendingExtraMove') &&
+            gameData['pendingExtraMove'] != null &&
+            gameData['pendingExtraMove'] == true) {
+
+          // Ekstra hamle hakkı aktifleştir
+          updates["extraMove"] = {
+            "active": true,
+            "userId": userId
+          };
+
+          // Bekleyen ekstra hamle hakkını temizle
+          updates["pendingExtraMove"] = false;
+
+          // Sıra hala aynı oyuncuda kalacak
+          hasExtraMove = true;
+
+          print("Ekstra hamle hakkı aktifleştirildi. Oyuncu bir hamle daha yapabilecek.");
+        } else {
+          // Normal hamle, sırayı rakibe geçir
+          updates["currentTurn"] = opponentId;
+          if (gameData != null &&
+              gameData.containsKey('restrictions') &&
+              gameData['restrictions'] != null &&
+              gameData['restrictions']['letterRestriction'] != null) {
+
+            Map<String, dynamic> letterRestriction = gameData['restrictions']['letterRestriction'];
+
+            if (letterRestriction['pendingActivation'] == true &&
+                letterRestriction['appliedTo'] == opponentId) {
+
+              updates["restrictions.letterRestriction.active"] = true;
+              updates["restrictions.letterRestriction.pendingActivation"] = false;
+
+              print("Harf kısıtlaması aktifleştirildi. Rakip bu tur kısıtlı harflerini kullanamayacak.");
+            }
+          }
+        }
+      }
       // Firebase'i güncelle
       await _firestore.collection('games').doc(gameId).update(updates);
+
+      // Kısıtlamaları kontrol et ve gerekirse sıfırla
+      // Eğer ekstra hamle kullanıyorsa kısıtlamaları kontrol etmeye gerek yok
+      if (!hasExtraMove) {
+        await _checkAndResetLetterRestrictions(gameId, userId);
+      }
+
     } catch (e) {
       throw Exception("Hamle yapılırken hata: $e");
     }
   }
+
+  /// Ekstra hamle hakkı uygular
+  Future<void> applyExtraMove(String gameId, String userId) async {
+    try {
+      // Ekstra hamle ödülü kullanıldığında, ilk önce bir flag ayarla
+      // Oyuncu mevcut hamlesini tamamladıktan sonra ekstra hamle aktifleşecek
+      await _firestore.collection('games').doc(gameId).update({
+        "pendingExtraMove": true
+      });
+
+      print("Ekstra hamle hakkı tanımlandı. Mevcut hamle tamamlandıktan sonra aktifleşecek.");
+    } catch (e) {
+      throw Exception("Ekstra hamle hakkı uygulanırken hata: $e");
+    }
+  }
+
 
   /// Pas geçer
   Future<void> passTurn(String gameId, String userId, String opponentId) async {
@@ -143,18 +228,135 @@ class FirebaseService {
       int currentPassCount = (gameDoc.data() as Map<String, dynamic>)['consecutivePassCount'] ?? 0;
       int newPassCount = currentPassCount + 1;
 
-      // Sırayı rakibe geç ve pas bilgisini kaydet
-      await _firestore.collection('games').doc(gameId).update({
-        "currentTurn": opponentId,
+
+      // Firebase güncellemelerini hazırla
+      Map<String, dynamic> updates = {
         "consecutivePassCount": newPassCount,
         "lastAction": {
           "userId": userId,
           "action": "pass",
           "timestamp": FieldValue.serverTimestamp(),
         }
-      });
+      };
+
+      // Ekstra hamle kontrolü
+      Map<String, dynamic>? gameData = gameDoc.data() as Map<String, dynamic>?;
+      bool hasExtraMove = false;
+
+      if (gameData != null &&
+          gameData.containsKey('extraMove') &&
+          gameData['extraMove'] != null &&
+          gameData['extraMove']['active'] == true &&
+          gameData['extraMove']['userId'] == userId) {
+        // Ekstra hamle kullanıldı, sıfırla
+        updates["extraMove"] = {
+          "active": false,
+          "userId": userId
+        };
+        updates["currentTurn"] = opponentId;
+        print("Ekstra hamle pas geçildiğinde sıfırlandı.");
+      }else{
+        // Normal pas geçme
+        // Oyuncunun bekleyen ekstra hamle hakkı var mı kontrol et
+        if (gameData != null &&
+            gameData.containsKey('pendingExtraMove') &&
+            gameData['pendingExtraMove'] != null &&
+            gameData['pendingExtraMove'] == true) {
+
+          // Ekstra hamle hakkı aktifleştir
+          updates["extraMove"] = {
+            "active": true,
+            "userId": userId
+          };
+
+          // Bekleyen ekstra hamle hakkını temizle
+          updates["pendingExtraMove"] = false;
+
+          // Sıra hala aynı oyuncuda kalacak
+          hasExtraMove = true;
+
+          print("Ekstra hamle hakkı aktifleştirildi. Oyuncu bir hamle daha yapabilecek.");
+        }else {
+          // Normal pas geçme, sırayı rakibe geçir
+          updates["currentTurn"] = opponentId;
+
+          if (gameData != null &&
+              gameData.containsKey('restrictions') &&
+              gameData['restrictions'] != null &&
+              gameData['restrictions']['letterRestriction'] != null) {
+
+            Map<String, dynamic> letterRestriction = gameData['restrictions']['letterRestriction'];
+
+            if (letterRestriction['pendingActivation'] == true &&
+                letterRestriction['appliedTo'] == opponentId) {
+
+              updates["restrictions.letterRestriction.active"] = true;
+              updates["restrictions.letterRestriction.pendingActivation"] = false;
+
+              print("Harf kısıtlaması aktifleştirildi. Rakip bu tur kısıtlı harflerini kullanamayacak.");
+            }
+          }
+        }
+      }
+
+      await _firestore.collection('games').doc(gameId).update(updates);
+
+
+      // Kısıtlamaları kontrol et ve gerekirse sıfırla
+      // Eğer ekstra hamle kullanıyorsa kısıtlamaları kontrol etmeye gerek yok
+      if (!hasExtraMove) {
+        await _checkAndResetLetterRestrictions(gameId, userId);
+      }
+
     } catch (e) {
       throw Exception("Pas geçilirken hata: $e");
+    }
+  }
+
+  /// Harf kısıtlamalarını kontrol eder ve gerekirse sıfırlar (1 tur sonra)
+  Future<void> _checkAndResetLetterRestrictions(String gameId, String currentTurnPlayerId) async {
+    try {
+      // Oyun durumunu al
+      DocumentSnapshot gameDoc = await _firestore.collection('games').doc(gameId).get();
+
+      if (!gameDoc.exists) return;
+
+      Map<String, dynamic>? gameData = gameDoc.data() as Map<String, dynamic>?;
+      if (gameData == null || !gameData.containsKey('restrictions')) return;
+
+      Map<String, dynamic> restrictions = Map<String, dynamic>.from(gameData['restrictions']);
+
+      // Harf kısıtlaması kontrolü - kısıtlamayı uygulayan oyuncu hamle yaptığında kısıtlama kaldırılmalı
+      if (restrictions.containsKey('letterRestriction') &&
+          restrictions['letterRestriction'] != null &&
+          restrictions['letterRestriction']['active'] == true ) {
+
+        if (restrictions['letterRestriction']['appliedTo'] == currentTurnPlayerId) {
+          await _firestore.collection('games').doc(gameId).update({
+            "restrictions.letterRestriction.active": false,
+            "restrictions.letterRestriction.pendingActivation": false
+          });
+
+          print("Harf kısıtlaması süresi doldu ve devre dışı bırakıldı.");
+        }
+      }
+
+      // Bölge kısıtlaması kontrolü - kısıtlamayı uygulayan oyuncu hamle yaptığında kısıtlama kaldırılmalı
+      if (restrictions.containsKey('areaRestriction') &&
+          restrictions['areaRestriction'] != null &&
+          restrictions['areaRestriction']['active'] == true ) {
+        // Süresi doldu, sıfırla
+        if (restrictions['areaRestriction']['appliedTo'] ==
+            currentTurnPlayerId) {
+          await _firestore.collection('games').doc(gameId).update({
+            "restrictions.areaRestriction.active": false
+          });
+
+          print("Bölge kısıtlaması süresi doldu ve devre dışı bırakıldı.");
+        }
+      }
+    } catch (e) {
+      print("Kısıtlamaları kontrol ederken hata: $e");
     }
   }
 
@@ -265,6 +467,7 @@ class FirebaseService {
         "appliedBy": appliedBy,
         "appliedTo": appliedTo,
         "expiresAt": FieldValue.serverTimestamp(),
+        "turnsRemaining": 1,
       };
 
       // Güncellenmiş kısıtlamaları kaydet
@@ -279,9 +482,11 @@ class FirebaseService {
   /// Harf kısıtlaması uygular
   Future<void> applyLetterRestriction(String gameId, String appliedBy, String appliedTo, List<int> letterIds) async {
     try {
+      // Kısıtlamayı hemen aktif etmiyoruz, rakibin sırası geldiğinde aktif olacak
       await _firestore.collection('games').doc(gameId).update({
         "restrictions.letterRestriction": {
-          "active": true,
+          "active": false, // Başlangıçta aktif değil
+          "pendingActivation": true, // Aktivasyon bekliyor
           "letterIds": letterIds,
           "appliedBy": appliedBy,
           "appliedTo": appliedTo,
@@ -293,17 +498,4 @@ class FirebaseService {
     }
   }
 
-  /// Ekstra hamle hakkı uygular
-  Future<void> applyExtraMove(String gameId, String userId) async {
-    try {
-      await _firestore.collection('games').doc(gameId).update({
-        "extraMove": {
-          "userId": userId,
-          "active": true,
-        }
-      });
-    } catch (e) {
-      throw Exception("Ekstra hamle hakkı uygulanırken hata: $e");
-    }
-  }
 }
