@@ -115,21 +115,42 @@ class GameTopBar extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
-            decoration: BoxDecoration(
-              color: myTurn ? Colors.green : Colors.orange,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              myTurn
-                  ? "$myUsername'ın sırası!"
-                  : "$opponentUsername'ın sırası...",
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Container(
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: myTurn ? Colors.green : Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.horizontal(left: Radius.circular(2)),
+                  ),
+                ),
               ),
-            ),
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 8),
+                width: 20,
+                height: 20,
+                decoration: BoxDecoration(
+                  color: myTurn ? Colors.green : Colors.orange,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  myTurn ? Icons.arrow_back : Icons.arrow_forward,
+                  color: Colors.white,
+                  size: 16,
+                ),
+              ),
+              Expanded(
+                child: Container(
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: !myTurn ? Colors.orange : Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.horizontal(right: Radius.circular(2)),
+                  ),
+                ),
+              ),
+            ],
           ),
 
           // Kalan harf sayısı
