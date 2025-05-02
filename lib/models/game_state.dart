@@ -291,6 +291,9 @@ class GameState {
   final Map<String, int>? finalScores;
   final int nextLetterId;
 
+  final DateTime? createdAt;
+  final int? duration;
+
   GameState({
     required this.gameId,
     this.status = GameStatus.active,
@@ -312,6 +315,8 @@ class GameState {
     this.endTime,
     this.finalScores,
     required this.nextLetterId,
+    this.createdAt,
+    this.duration,
   });
 
   // Map'ten GameState oluşturmak için factory constructor
@@ -395,6 +400,15 @@ class GameState {
       }
     }
 
+    DateTime? createdAt;
+    if (map['createdAt'] != null) {
+      if (map['createdAt'] is Timestamp) {
+        createdAt = (map['createdAt'] as Timestamp).toDate();
+      }
+    }
+
+    int? duration = map['duration'] as int?;
+
     // Ek alanları dönüştür
     DateTime? endTime;
     if (map['endTime'] != null) {
@@ -453,6 +467,8 @@ class GameState {
       endTime: endTime,
       finalScores: finalScores,
       nextLetterId: maxId + 1,
+      createdAt: createdAt,
+      duration: duration,
     );
   }
 

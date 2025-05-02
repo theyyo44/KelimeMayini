@@ -1,4 +1,5 @@
 // screens/game_screen.dart
+import 'dart:async';
 import 'dart:math';
 
 
@@ -88,6 +89,9 @@ class _GameScreenState extends State<GameScreen> {
   bool _isAreaRestrictionNotified = false;
   bool _isLetterRestrictionNotified = false;
 
+  Timer? _gameTimer;
+  int _remainingSeconds = 0;
+
   // Add the transformation controller for zooming
   late TransformationController _boardTransformController;
 
@@ -101,6 +105,7 @@ class _GameScreenState extends State<GameScreen> {
     _loadWordList();
     _loadGameData().then((_) {
       _loadUsernames();
+      _setupGameTimer();
     });
   }
 
@@ -109,6 +114,7 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void dispose() {
     // Dispose the controller when the widget is destroyed
+    _gameTimer?.cancel();
     _boardTransformController.dispose();
     super.dispose();
   }
@@ -117,6 +123,99 @@ class _GameScreenState extends State<GameScreen> {
     _firebaseService = FirebaseService();
     _letterService = LetterService(_firebaseService);
     _gameLogicService = GameLogicService(_firebaseService, _letterService);
+  }
+
+  // Timer kurulumu için yeni metod
+  void _setupGameTimer() {
+
+    _gameTimer?.cancel();
+    if (gameState == null) return;
+
+    final createdAtTimestamp = gameState!.createdAt;
+    final durationSeconds = gameState!.duration;
+
+    if (createdAtTimestamp == null || durationSeconds == null) {
+      print("Zaman bilgisi bulunamadı, timer kurulmadı");
+      return;
+    }
+
+    DateTime startTime = createdAtTimestamp;
+    if (gameState!.lastAction != null && gameState!.lastAction!.timestamp != null) {
+      startTime = gameState!.lastAction!.timestamp!;
+    }
+    // Şimdiki zaman ile oluşturulma zamanı arasındaki farkı hesapla
+    final now = DateTime.now();
+    final elapsed = now.difference(startTime).inSeconds;
+
+    // Kalan süreyi hesapla
+    _remainingSeconds = durationSeconds - elapsed;
+    if (_remainingSeconds < -5) _remainingSeconds = 0;
+    print("Kalan süre: $_remainingSeconds saniye");
+
+    // Süre zaten bitmişse oyunu sonlandır
+    if (_remainingSeconds <= 0) {
+      _handleTimeOut();
+      return;
+    }
+
+    // Timer'ı başlat
+    _gameTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      setState(() {
+        _remainingSeconds--;
+      });
+
+      // Her 10 saniyede bir debug için yazdır
+      if (_remainingSeconds % 10 == 0) {
+        print("Kalan süre: $_remainingSeconds saniye");
+      }
+
+      if (_remainingSeconds <= 0) {
+        timer.cancel();
+        _handleTimeOut();
+      }
+    });
+  }
+
+// Süre bitiminde çağrılacak metod
+  void _handleTimeOut() {
+    print("Süre doldu! Oyun sonlandırılıyor...");
+
+    // Eğer oyun zaten bitmişse işlem yapma
+    if (gameState?.status == GameStatus.completed) {
+      print("Oyun zaten tamamlanmış durumda, işlem yapılmadı");
+      return;
+    }
+
+    // Kullanıcının sırası değilse kazanan olarak işaretle
+    // Kullanıcının sırasıysa kaybeden olarak işaretle
+    final winnerId = _isMyTurn() ? opponentId : widget.userId;
+
+    // Bildirim göster
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Süre doldu! Oyun sona erdi."),
+        backgroundColor: Colors.red,
+        duration: Duration(seconds: 5),
+      ),
+    );
+
+    // Oyunu bitir
+    _gameLogicService.endGame(
+        widget.gameId,
+        widget.userId,
+        opponentId,
+        'timeOut',
+        winnerId
+    ).then((_) {
+      print("Oyun süre bitimi nedeniyle sonlandırıldı.");
+    }).catchError((e) {
+      print("Oyun sonlandırılırken hata: $e");
+    });
   }
 
   Future<void> _loadUsernames() async {
@@ -317,7 +416,7 @@ class _GameScreenState extends State<GameScreen> {
 
           _letterService.setNextLetterId(gameState!.nextLetterId);
           // Check for restrictions
-
+          _setupGameTimer();
 
           // Debug için kalan harf sayısını yazdır
           print("Firebase'den gelen harf sayısı: ${gameState!.letterPool.length}");
@@ -1209,6 +1308,7 @@ class _GameScreenState extends State<GameScreen> {
             myTurn: _isMyTurn(),
             myUsername: myUsername,
             opponentUsername: opponentUsername,
+            remainingSeconds: _remainingSeconds,
           ),
 
           const SizedBox(height: 8),

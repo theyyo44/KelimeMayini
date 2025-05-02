@@ -81,6 +81,7 @@ class _NewGameScreenState extends State<NewGameScreen> {
           .collection('games')
           .where('status', isEqualTo: 'waiting')
           .where('players', arrayContains: currentUser!.uid)
+          .where('duration', isEqualTo: widget.durationSeconds)
           .get();
 
       if (existing.docs.isEmpty && !hasCreatedGame) {

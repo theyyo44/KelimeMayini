@@ -108,11 +108,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   int _parseDuration(String label) {
-    if (label.contains("2")) return 120;
-    if (label.contains("5")) return 300;
-    if (label.contains("12")) return 43200;
-    if (label.contains("24")) return 86400;
-    return 300; // default
+    switch (label) {
+      case "2 Dakika":
+        return 120;
+      case "5 Dakika":
+        return 300;
+      case "12 Saat":
+        return 43200;
+      case "24 Saat":
+        return 86400;
+      default:
+        return 300; // varsayılan
+    }
   }
 
   Future<void> _logout() async {

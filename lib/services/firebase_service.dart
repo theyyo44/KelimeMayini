@@ -384,12 +384,23 @@ class FirebaseService {
   /// Teslim olur
   Future<void> surrender(String gameId, String userId, String opponentId) async {
     try {
+      // Get current scores
+      final gameState = await loadGameState(gameId);
+      final Map<String, int> finalScores = {
+        userId: gameState.scores[userId] ?? 0,
+        opponentId: gameState.scores[opponentId] ?? 0
+      };
+
       await _firestore.collection('games').doc(gameId).update({
         "status": "completed",
         "winner": opponentId,
         "endReason": "surrender",
         "endTime": FieldValue.serverTimestamp(),
+        "finalScores": finalScores, // Make sure finalScores is added
       });
+
+      // Add this line to call the stats update function
+      await _updateUserStatsFromCompletedGame(gameId);
     } catch (e) {
       throw Exception("Teslim olurken hata: $e");
     }
@@ -550,7 +561,6 @@ class FirebaseService {
 
     await docRef.update({'statsUpdated': true}); // tekrar işlemeyi engelle
   }
-
 
 
 }

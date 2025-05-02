@@ -304,6 +304,8 @@ class GameLogicService {
       opponentFinalScore -= remainingPoints;
     }
 
+
+// game_logic_service.dart dosyasına ekleyin
     // Kazananı belirle
     String winner;
     if (myFinalScore > opponentFinalScore) {
@@ -325,6 +327,28 @@ class GameLogicService {
         }
     );
   }
+
+  // game_logic_service.dart dosyasına ekleyin
+  Future<void> endGame(String gameId, String userId, String opponentId, String reason, String winnerId) async {
+    // Oyun durumunu yükle
+    final gameState = await _firebaseService.loadGameState(gameId);
+
+    // Puanları hesapla
+    int userScore = gameState.scores[userId] ?? 0;
+    int opponentScore = gameState.scores[opponentId] ?? 0;
+
+    // Oyun sonucunu Firebase'e kaydet
+    await _firebaseService.endGame(
+        gameId,
+        reason,
+        winnerId,
+        {
+          userId: userScore,
+          opponentId: opponentScore,
+        }
+    );
+  }
+
 
   /// Teslim olur
   Future<void> surrender(String gameId, String userId,
