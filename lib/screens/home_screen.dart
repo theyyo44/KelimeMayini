@@ -1,20 +1,24 @@
+// home_screen.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../services/auth_service.dart';
 import 'new_game_screen.dart';
 import 'my_games_screen.dart';
+import 'login_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final User user;
-  const HomeScreen({required this.user,super.key});
+  const HomeScreen({required this.user, super.key});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final user = FirebaseAuth.instance.currentUser;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   late DocumentReference userDoc;
 
   String username = "Yükleniyor...";
@@ -23,30 +27,28 @@ class _HomeScreenState extends State<HomeScreen> {
   int points = 0;
 
   @override
+  @override
   void initState() {
     super.initState();
-    userDoc = FirebaseFirestore.instance.collection('users').doc(user!.uid);
-    _getStats();
+    userDoc = _firestore.collection('users').doc(widget.user.uid);
+    userDoc.snapshots().listen((snapshot) {
+      if (snapshot.exists) {
+        setState(() {
+          username = snapshot['username'] ?? "Bilinmiyor";
+          wins = snapshot['wins'] ?? 0;
+          matches = snapshot['matches'] ?? 0;
+          points = snapshot['points'] ?? 0;
+        });
+      }
+    });
   }
 
-  Future<void> _getStats() async {
-    final snapshot = await userDoc.get();
-    if (snapshot.exists) {
-      setState(() {
-        username = snapshot['username'];
-        wins = snapshot['wins'];
-        matches = snapshot['matches'];
-        points = snapshot['points'];
-      });
-    }
-  }
+
 
   double get winRate => matches == 0 ? 0 : (wins / matches) * 100;
 
   void _showDurationSelector({required bool isShortGame}) {
-    final durations = isShortGame
-        ? ["2 Dakika", "5 Dakika"]
-        : ["12 Saat", "24 Saat"];
+    final durations = isShortGame ? ["2 Dakika", "5 Dakika"] : ["12 Saat", "24 Saat"];
 
     showModalBottomSheet(
       context: context,
@@ -81,7 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const NewGameScreen(),
+                          builder: (_) => NewGameScreen(durationSeconds: _parseDuration(label)),
                         ),
                       );
                     },
@@ -105,6 +107,25 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  int _parseDuration(String label) {
+    if (label.contains("2")) return 120;
+    if (label.contains("5")) return 300;
+    if (label.contains("12")) return 43200;
+    if (label.contains("24")) return 86400;
+    return 300; // default
+  }
+
+  Future<void> _logout() async {
+    await AuthService().logout();
+    if (mounted) {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+            (route) => false,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -112,6 +133,13 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text("Ana Sayfa"),
         backgroundColor: Colors.deepPurple,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: _logout,
+            tooltip: "Çıkış Yap",
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(24.0),
@@ -145,16 +173,14 @@ class _HomeScreenState extends State<HomeScreen> {
                       backgroundColor: Colors.amberAccent,
                       foregroundColor: Colors.black,
                       minimumSize: const Size(double.infinity, 50),
-                      padding: const EdgeInsets.symmetric(vertical: 16) ,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
-
                       ),
                     ),
                     child: const Text("Oyunlarım", style: TextStyle(fontSize: 18)),
                   ),
-
-                  const SizedBox(height: 12), // ← Bu satır eklenmeli
+                  const SizedBox(height: 12),
                   ElevatedButton(
                     onPressed: () => _showDurationSelector(isShortGame: false),
                     style: ElevatedButton.styleFrom(
@@ -178,6 +204,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     child: const Text("Kısa Oyun", style: TextStyle(fontSize: 18)),
                   ),
+                  
                 ],
               ),
             ),
@@ -212,4 +239,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
+
 }

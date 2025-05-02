@@ -11,16 +11,16 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final AuthService _authService = AuthService();
   String? _errorMessage;
 
   Future<void> _login() async {
-    final email = _emailController.text.trim();
+    final username = _usernameController.text.trim();
     final password = _passwordController.text.trim();
 
-    final user = await _authService.loginWithEmail(email, password);
+    final user = await _authService.loginWithUsername(username, password);
     if (user != null) {
       Navigator.pushReplacement(
         context,
@@ -28,11 +28,10 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     } else {
       setState(() {
-        _errorMessage = "Giriş başarısız. Lütfen bilgilerinizi kontrol edin.";
+        _errorMessage = "Giriş başarısız. Kullanıcı adı veya şifre yanlış.";
       });
     }
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -63,22 +62,21 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             const SizedBox(height: 16),
             TextField(
-              controller: _emailController,
+              controller: _usernameController,
               style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
-                labelText: "E-posta",
+                labelText: "Kullanıcı Adı",
                 labelStyle: const TextStyle(color: Colors.white70),
                 filled: true,
                 fillColor: Colors.white12,
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              keyboardType: TextInputType.emailAddress,
             ),
             const SizedBox(height: 16),
             TextField(
               controller: _passwordController,
-              style: const TextStyle(color: Colors.white),
               obscureText: true,
+              style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
                 labelText: "Şifre",
                 labelStyle: const TextStyle(color: Colors.white70),

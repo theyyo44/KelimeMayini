@@ -39,6 +39,8 @@ class GameScreen extends StatefulWidget {
   final String gameId;
   final String userId;
 
+
+
   const GameScreen({super.key, required this.gameId, required this.userId});
 
   @override
@@ -50,11 +52,13 @@ class _GameScreenState extends State<GameScreen> {
   late FirebaseService _firebaseService;
   late LetterService _letterService;
   late GameLogicService _gameLogicService;
+  String myUsername = "";
+  String opponentUsername = "";
+  String opponentId = "";
 
   // Game state
   bool isLoading = true;
   GameState? gameState;
-  String opponentId = '';
 
   // Local state for board and letters
   List<List<String>> board = List.generate(BOARD_SIZE, (_) => List.filled(BOARD_SIZE, ''));
@@ -91,11 +95,16 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void initState() {
     super.initState();
+
     _boardTransformController = TransformationController();
     _initializeServices();
     _loadWordList();
-    _loadGameData();
+    _loadGameData().then((_) {
+      _loadUsernames();
+    });
   }
+
+
 
   @override
   void dispose() {
@@ -108,6 +117,13 @@ class _GameScreenState extends State<GameScreen> {
     _firebaseService = FirebaseService();
     _letterService = LetterService(_firebaseService);
     _gameLogicService = GameLogicService(_firebaseService, _letterService);
+  }
+
+  Future<void> _loadUsernames() async {
+    final firebaseService = FirebaseService();
+    myUsername = await firebaseService.getUsernameById(widget.userId);
+    opponentUsername = await firebaseService.getUsernameById(opponentId);
+    setState(() {});
   }
 
   Future<void> _loadWordList() async {
@@ -1191,6 +1207,8 @@ class _GameScreenState extends State<GameScreen> {
             opponentScore: gameState!.scores[opponentId] ?? 0,
             remainingLettersCount: remainingLetterCount,
             myTurn: _isMyTurn(),
+            myUsername: myUsername,
+            opponentUsername: opponentUsername,
           ),
 
           const SizedBox(height: 8),

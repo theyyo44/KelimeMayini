@@ -361,19 +361,25 @@ class FirebaseService {
   }
 
   /// Oyunu sonlandırır
-  Future<void> endGame(String gameId, String reason, String winner, Map<String, int> finalScores) async {
+  Future<void> endGame(String gameId, String reason, String winnerId, Map<String, int> finalScores) async {
     try {
-      await _firestore.collection('games').doc(gameId).update({
-        "status": "completed",
-        "endReason": reason,
-        "endTime": FieldValue.serverTimestamp(),
-        "winner": winner,
-        "finalScores": finalScores,
+      final gameRef = _firestore.collection('games').doc(gameId);
+
+      await gameRef.update({
+        'status': 'completed',
+        'endReason': reason,
+        'endTime': FieldValue.serverTimestamp(),
+        'winner': winnerId,
+        'finalScores': finalScores,
       });
+
+      await _updateUserStatsFromCompletedGame(gameId); // 👈 kullanıcı istatistiklerini burada güncelliyoruz
+
     } catch (e) {
       throw Exception("Oyun sonlandırılırken hata: $e");
     }
   }
+
 
   /// Teslim olur
   Future<void> surrender(String gameId, String userId, String opponentId) async {
@@ -497,5 +503,54 @@ class FirebaseService {
       throw Exception("Harf kısıtlaması uygulanırken hata: $e");
     }
   }
+
+  /// Verilen kullanıcı ID'sine karşılık gelen kullanıcı adını getirir
+  Future<String> getUsernameById(String userId) async {
+    try {
+      final doc = await _firestore.collection('users').doc(userId).get();
+      if (doc.exists && doc.data() != null && doc.data()!.containsKey('username')) {
+        return doc.data()!['username'] as String;
+      } else {
+        return "Bilinmeyen";
+      }
+    } catch (e) {
+      print("Kullanıcı adı alınırken hata: $e");
+      return "Hata";
+    }
+  }
+
+
+  Future<void> _updateUserStatsFromCompletedGame(String gameId) async {
+    final docRef = _firestore.collection('games').doc(gameId);
+    final doc = await docRef.get();
+
+    if (!doc.exists) return;
+
+    final data = doc.data()!;
+    if (data['statsUpdated'] == true) return; // tekrar işlemeyi engelle
+
+    final List<dynamic> players = data['players'] ?? [];
+    final String? winnerId = data['winner'];
+    final Map<String, dynamic> finalScores = Map<String, dynamic>.from(data['finalScores'] ?? {});
+
+    for (var playerId in players) {
+      final userRef = _firestore.collection('users').doc(playerId);
+      await userRef.update({
+        'matches': FieldValue.increment(1),
+        'points': FieldValue.increment(finalScores[playerId]?.toInt() ?? 0),
+      });
+    }
+
+    if (winnerId != null) {
+      final winnerRef = _firestore.collection('users').doc(winnerId);
+      await winnerRef.update({
+        'wins': FieldValue.increment(1),
+      });
+    }
+
+    await docRef.update({'statsUpdated': true}); // tekrar işlemeyi engelle
+  }
+
+
 
 }

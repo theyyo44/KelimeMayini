@@ -1,21 +1,31 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // 🔐 Kayıt işlemi (e-posta ve şifre ile)
-  Future<User?> registerWithEmail(String email, String password) async {
+  // 🔐 Kayıt işlemi (e-posta, şifre ve kullanıcı adı ile)
+  Future<User?> registerWithEmail(String email, String username, String password) async {
     try {
+      // Kullanıcı adı benzersiz mi kontrol et
+      final existingUser = await _firestore
+          .collection('users')
+          .where('username', isEqualTo: username)
+          .get();
+
+      if (existingUser.docs.isNotEmpty) {
+        throw Exception("Bu kullanıcı adı zaten kullanılıyor.");
+      }
+
       final result = await _auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
 
-      // 🆕 Yeni kullanıcı için başlangıç verilerini kaydet
       await _firestore.collection('users').doc(result.user!.uid).set({
-        'username': email.split('@')[0], // e-posta başı
+        'username': username,
+        'email': email,
         'wins': 0,
         'matches': 0,
         'points': 0,
@@ -28,13 +38,27 @@ class AuthService {
     }
   }
 
-  // 🔑 Giriş işlemi
-  Future<User?> loginWithEmail(String email, String password) async {
+  // 🔑 Kullanıcı adı ve şifre ile giriş
+  Future<User?> loginWithUsername(String username, String password) async {
     try {
+      // Kullanıcı adına göre e-posta bul
+      final querySnapshot = await _firestore
+          .collection('users')
+          .where('username', isEqualTo: username)
+          .limit(1)
+          .get();
+
+      if (querySnapshot.docs.isEmpty) {
+        throw Exception("Kullanıcı bulunamadı.");
+      }
+
+      final email = querySnapshot.docs.first['email'];
+
       final result = await _auth.signInWithEmailAndPassword(
         email: email,
         password: password,
       );
+
       return result.user;
     } catch (e) {
       print("Giriş hatası: $e");
@@ -42,14 +66,9 @@ class AuthService {
     }
   }
 
-  //  Oturumu kapatma
-  Future<void> logout() async {
-    await _auth.signOut();
-  }
+  Future<void> logout() async => await _auth.signOut();
 
-  //  Şu anki kullanıcı
   User? get currentUser => _auth.currentUser;
 
-  //  Giriş durumunu dinleme (isteğe bağlı)
   Stream<User?> get userChanges => _auth.authStateChanges();
 }

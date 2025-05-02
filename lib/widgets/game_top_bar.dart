@@ -1,4 +1,3 @@
-// widgets/game_top_bar.dart
 import 'package:flutter/material.dart';
 import '../utils/constants.dart';
 
@@ -7,6 +6,8 @@ class GameTopBar extends StatelessWidget {
   final int opponentScore;
   final int remainingLettersCount;
   final bool myTurn;
+  final String myUsername;
+  final String opponentUsername;
 
   const GameTopBar({
     super.key,
@@ -14,6 +15,8 @@ class GameTopBar extends StatelessWidget {
     required this.opponentScore,
     required this.remainingLettersCount,
     required this.myTurn,
+    required this.myUsername,
+    required this.opponentUsername,
   });
 
   @override
@@ -26,12 +29,13 @@ class GameTopBar extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
+              // Kullanıcı (Sen)
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    "👤 Sen",
-                    style: TextStyle(color: Colors.white),
+                  Text(
+                    "👤 $myUsername",
+                    style: const TextStyle(color: Colors.white),
                   ),
                   Text(
                     "🏆 $myScore",
@@ -39,6 +43,8 @@ class GameTopBar extends StatelessWidget {
                   ),
                 ],
               ),
+
+              // Kalan Harf Sayısı
               Column(
                 children: [
                   const Text(
@@ -54,12 +60,14 @@ class GameTopBar extends StatelessWidget {
                   ),
                 ],
               ),
+
+              // Rakip
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  const Text(
-                    "🤖 Rakip",
-                    style: TextStyle(color: Colors.white),
+                  Text(
+                    "🤖 $opponentUsername",
+                    style: const TextStyle(color: Colors.white),
                   ),
                   Text(
                     "🏆 $opponentScore",
@@ -77,7 +85,9 @@ class GameTopBar extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
-              myTurn ? "Senin sıran!" : "Rakibin sırası...",
+              myTurn
+                  ? "$myUsername'ın sırası!"
+                  : "$opponentUsername'ın sırası...",
               style: const TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,

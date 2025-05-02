@@ -5,7 +5,8 @@ import 'package:kelime_mayinlari/screens/game_screen.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class NewGameScreen extends StatefulWidget {
-  const NewGameScreen({super.key});
+  final int durationSeconds;
+  const NewGameScreen({super.key, required this.durationSeconds});
 
   @override
   State<NewGameScreen> createState() => _NewGameScreenState();
@@ -19,10 +20,18 @@ class _NewGameScreenState extends State<NewGameScreen> {
   bool hasCreatedGame = false; // Sadece bir kez oyun oluşturmak için
 
   @override
+  @override
   void initState() {
     super.initState();
     currentUser = _auth.currentUser;
     _searchForOpponent();
+
+    // ⏱ 3 saniye sonra ana sayfaya geri dön
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) {
+        Navigator.pop(context);
+      }
+    });
   }
 
   Future<void> _searchForOpponent() async {
@@ -31,6 +40,7 @@ class _NewGameScreenState extends State<NewGameScreen> {
     _searchSub = _firestore
         .collection('games')
         .where('status', isEqualTo: 'waiting')
+        .where('duration', isEqualTo: widget.durationSeconds)
         .snapshots()
         .listen((snapshot) async {
       if (_searchSub == null || hasCreatedGame) return;
@@ -81,7 +91,7 @@ class _NewGameScreenState extends State<NewGameScreen> {
           'status': 'waiting',
           'createdAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
-          'duration': 300,
+          'duration': widget.durationSeconds,
           'winner': null,
         });
 
