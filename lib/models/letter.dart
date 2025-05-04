@@ -15,10 +15,10 @@ class Letter {
   // Map'ten Letter oluşturmak için factory constructor
   factory Letter.fromMap(Map<String, dynamic> map) {
     return Letter(
-      char: map['char'] as String,
-      point: map['point'] as int,
-      id: map['id'] as int,
-      isJoker: map['char'] == 'JOKER',
+      char: map['char'] ?? '',
+      point: map['point'] ?? 0,
+      id: map['id'] ?? 0,
+      isJoker: map['isJoker'] ?? (map['char'] == 'JOKER'),
     );
   }
 
@@ -28,6 +28,7 @@ class Letter {
       'char': char,
       'point': point,
       'id': id,
+      'isJoker': isJoker,
     };
   }
 

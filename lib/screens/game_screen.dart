@@ -34,6 +34,7 @@ import '../widgets/game_actions.dart';
 import 'dialogs/game_end_dialog.dart';
 import 'dialogs/surrender_dialog.dart';
 import 'dialogs/restriction_dialog.dart';
+import 'dialogs/joker_selection_dialog.dart';
 
 
 class GameScreen extends StatefulWidget {
@@ -83,8 +84,8 @@ class _GameScreenState extends State<GameScreen> {
   // Mayın ve Ödüller
   Map<String, Mine> mines = {};
   Map<String, Reward> rewards = {};
-  Map<String, bool> mineVisibility = {}; // Hangi mayınların görünür olduğu
-  Map<String, bool> rewardVisibility = {}; // Hangi ödüllerin görünür olduğu
+  Map<String, bool> mineVisibility = {}; 
+  Map<String, bool> rewardVisibility = {};
 
   bool _isAreaRestrictionNotified = false;
   bool _isLetterRestrictionNotified = false;
@@ -1177,6 +1178,8 @@ class _GameScreenState extends State<GameScreen> {
                 final displayChar = tempChar.isNotEmpty ? tempChar : placedChar;
                 final point = tempPlacedLetters['$row-$col']?['point'];
 
+                final isTransformedJoker = tempPlacedLetters['$row-$col']?['isJoker'] ?? false;
+
                 final position = '$row-$col';
                 final hasMine = mineVisibility[position] ?? false;
                 final hasReward = rewardVisibility[position] ?? false;
@@ -1193,18 +1196,52 @@ class _GameScreenState extends State<GameScreen> {
                   restrictedSide: restrictedSide,
                   hasMine: hasMine,
                   hasReward: hasReward,
-                  onAccept: (data) {
-                    setState(() {
-                      tempPlacedLetters['$row-$col'] = data;
-                      myLetters.removeWhere((l) => l.id == data['id']);
-                      _updateCurrentWord();
-                    });
+                  isTransformedJoker: tempPlacedLetters['$row-$col']?['isJoker'] ?? false,
+                  onAccept: (data) async {
+                    if (data['char'] == 'JOKER') {
+                      // Kullanıcıdan harf seçmesini iste
+                      final selectedLetter = await JokerSelectionDialog.show(context);
+
+                      if (selectedLetter != null) {
+                        setState(() {
+                          // JOKER'ı seçilen harfe dönüştür
+                          final modifiedData = Map<String, dynamic>.from(data);
+                          modifiedData['char'] = selectedLetter;
+                          modifiedData['originalChar'] = 'JOKER'; // Orijinal karakteri sakla
+                          modifiedData['isJoker'] = true; // JOKER olduğunu işaretle
+
+                          tempPlacedLetters['$row-$col'] = modifiedData;
+                          myLetters.removeWhere((l) => l.id == data['id']);
+                          _updateCurrentWord();
+                        });
+                      }
+                    } else {
+                      // Normal harf yerleştirme
+                      setState(() {
+                        tempPlacedLetters['$row-$col'] = data;
+                        myLetters.removeWhere((l) => l.id == data['id']);
+                        _updateCurrentWord();
+                      });
+                    }
                   },
                   onTap: () {
                     if (_isMyTurn() && tempPlacedLetters.containsKey('$row-$col')) {
                       setState(() {
                         final letter = tempPlacedLetters['$row-$col']!;
-                        myLetters.add(Letter.fromMap(letter));
+
+                        // Convert back to Letter when removing
+                        if (letter['originalChar'] == 'JOKER') {
+                          // If it was a JOKER, restore it as JOKER
+                          myLetters.add(Letter(
+                            char: 'JOKER',
+                            point: letter['point'],
+                            id: letter['id'],
+                            isJoker: true,
+                          ));
+                        } else {
+                          myLetters.add(Letter.fromMap(letter));
+                        }
+
                         tempPlacedLetters.remove('$row-$col');
                         _updateCurrentWord();
                       });

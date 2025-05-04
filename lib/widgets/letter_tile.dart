@@ -1,4 +1,4 @@
-// widgets/letter_tile.dart
+
 import 'package:flutter/material.dart';
 import '../models/letter.dart';
 import '../utils/constants.dart';
@@ -18,7 +18,7 @@ class LetterTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Draggable<Map<String, dynamic>>(
-      // Eğer harf kısıtlı veya aktif değilse sürüklemeyi devre dışı bırak
+
       data: isActive && !isRestricted ? letter.toMap() : null,
       feedback: _buildTile(isBeingDragged: true),
       childWhenDragging: _buildTile(isEmpty: true),
@@ -33,14 +33,36 @@ class LetterTile extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 4),
       decoration: BoxDecoration(
         color: _getTileColor(isEmpty),
-        border: Border.all(color: Colors.black),
+        border: Border.all(
+          color: letter.isJoker ? Colors.purple : Colors.black,
+          width: letter.isJoker ? 2 : 1,
+        ),
         borderRadius: BorderRadius.circular(6),
       ),
       child: Stack(
         children: [
           if (!isEmpty)
             Center(
-              child: Text(
+              child: letter.isJoker
+                  ? Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.star,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                  Text(
+                    "JOKER",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              )
+                  : Text(
                 letter.char,
                 style: GameStyles.letterStyle,
               ),

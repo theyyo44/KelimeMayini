@@ -15,8 +15,11 @@ class BoardCell extends StatelessWidget {
   final String restrictedSide;
   final bool hasMine; // Hücrede mayın var mı?
   final bool hasReward; // Hücrede ödül var mı?
+  final bool isTransformedJoker;
   final Function(Map<String, dynamic>)? onAccept;
   final Function()? onTap;
+
+
 
   const BoardCell({
     super.key,
@@ -31,8 +34,10 @@ class BoardCell extends StatelessWidget {
     this.restrictedSide = '',
     this.hasMine = false,
     this.hasReward = false,
+    this.isTransformedJoker = false,
     this.onAccept,
     this.onTap,
+
   });
 
   @override
@@ -94,6 +99,7 @@ class BoardCell extends StatelessWidget {
             SpecialCells.isTripleWordScore(row, col) ||
             SpecialCells.isCenter(row, col);
 
+
         return GestureDetector(
           onTap: displayChar.isNotEmpty && isTemporary ? onTap : null,
           child: Stack(
@@ -102,15 +108,16 @@ class BoardCell extends StatelessWidget {
               Container(
                 margin: const EdgeInsets.all(1),
                 decoration: BoxDecoration(
-                  color: cellColor,
-                  borderRadius: BorderRadius.circular(4),  // Köşeleri yumuşat
+                  color: isTransformedJoker ? Colors.purple[100] : cellColor,
+                  borderRadius: BorderRadius.circular(4),
                   border: Border.all(
-                    color: isSpecialCell
+                    color: isTransformedJoker
+                        ? Colors.purple
+                        : isSpecialCell
                         ? Colors.grey.shade600
                         : Colors.grey.shade300,
-                    width: 0.8,
+                    width: isTransformedJoker ? 2 : 0.8,
                   ),
-                  // Taşlara hafif gölge
                   boxShadow: displayChar.isNotEmpty
                       ? [
                     BoxShadow(
@@ -132,7 +139,7 @@ class BoardCell extends StatelessWidget {
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 16,  // Biraz daha büyük
-                            color: Colors.black87,  // Hafif ton
+                            color: isTransformedJoker ? Colors.purple[900] : Colors.black87, // Hafif ton
                           ),
                         ),
                       ),
@@ -149,6 +156,18 @@ class BoardCell extends StatelessWidget {
                             fontWeight: FontWeight.bold,
                             color: Colors.black54,
                           ),
+                        ),
+                      ),
+
+                    // JOKER göstergesi (dönüştürülmüş JOKER için)
+                    if (isTransformedJoker)
+                      Positioned(
+                        top: 2,
+                        right: 4,
+                        child: Icon(
+                          Icons.star,
+                          size: 12,
+                          color: Colors.purple,
                         ),
                       ),
 

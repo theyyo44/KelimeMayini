@@ -197,11 +197,14 @@ class GameLogicService {
     // Hamleyi Firebase'e kaydet
     Map<String, Map<String, dynamic>> newBoardCells = {};
     for (var entry in tempPlacedLetters.entries) {
+      final data = entry.value;
       newBoardCells[entry.key] = {
-        'char': entry.value['char'],
-        'id': entry.value['id'],
-        'point': entry.value['point'],
+        'char': data['char'],
+        'id': data['id'],
+        'point': data['point'],
         'placedBy': userId,
+        'isJoker': data['isJoker'] ?? false,
+        'originalChar': data['originalChar'] ?? data['char'],
       };
     }
 

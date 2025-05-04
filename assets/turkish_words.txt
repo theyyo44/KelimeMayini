@@ -32153,7 +32153,7 @@ içi boş
 içici
 içicilik
 iç içe
-iç içelik
+içel
 içi çıfıt çarşısı
 içi dar
 içi dışı bir
@@ -68917,6 +68917,7 @@ tütüncü
 tütüncülük
 tütünlük
 tütün rengi
+tüvan
 tüvana
 tüveyç
 tüvit
